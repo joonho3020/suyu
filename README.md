@@ -18,9 +18,9 @@ Add the following features:
         - Note that when we select an object, select resize, and start deleting the previously set values, we should not delete the object that is being selected
     - [x] Snap & grid (snap should have an option to be disabled for selected objects)
     - [x] Double clicking an object should enable text editing of the embedded text within an object
-    - [ ] Triangle, parallelogram, trapezoid
-    - [ ] Bidirectional arrows
-    - [ ] Line traits (dotted, dashed etc)
+    - [x] Triangle, parallelogram, trapezoid
+    - [x] Bidirectional arrows
+    - [x] Line traits (dotted, dashed etc)
     - [ ] Multi-angled lines (right-click to set vertices, left-click to end)
 - Scene-object & inter-object interactions
     - [x] Moving of objects using arrow buttons

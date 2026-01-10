@@ -8,8 +8,13 @@ enum Tool {
     Select,
     Rectangle,
     Ellipse,
+    Triangle,
+    Parallelogram,
+    Trapezoid,
     Line,
     Arrow,
+    BidirectionalArrow,
+    Polyline,
     Pen,
     Text,
     Pan,
@@ -24,7 +29,12 @@ enum InProgress {
     DragLine {
         start: egui::Pos2,
         current: egui::Pos2,
-        arrow: bool,
+        arrow_style: model::ArrowStyle,
+    },
+    Polyline {
+        points: Vec<egui::Pos2>,
+        current: egui::Pos2,
+        arrow_style: model::ArrowStyle,
     },
     Pen {
         points: Vec<egui::Pos2>,
@@ -896,7 +906,10 @@ impl DiagramApp {
                             let rectf = model::RectF::from_min_max(min, max);
                             match &mut element.kind {
                                 model::ElementKind::Rect { rect, .. }
-                                | model::ElementKind::Ellipse { rect, .. } => {
+                                | model::ElementKind::Ellipse { rect, .. }
+                                | model::ElementKind::Triangle { rect, .. }
+                                | model::ElementKind::Parallelogram { rect, .. }
+                                | model::ElementKind::Trapezoid { rect, .. } => {
                                     *rect = rectf;
                                 }
                                 _ => stop_transform = true,
@@ -974,7 +987,11 @@ impl DiagramApp {
         let handle_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 160, 255));
 
         match kind {
-            model::ElementKind::Rect { rect, .. } | model::ElementKind::Ellipse { rect, .. } => {
+            model::ElementKind::Rect { rect, .. }
+            | model::ElementKind::Ellipse { rect, .. }
+            | model::ElementKind::Triangle { rect, .. }
+            | model::ElementKind::Parallelogram { rect, .. }
+            | model::ElementKind::Trapezoid { rect, .. } => {
                 let rect = rect.to_rect();
                 let center = rect.center();
                 let size = rect.size();
@@ -1191,11 +1208,26 @@ impl eframe::App for DiagramApp {
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::O) {
                     self.tool = Tool::Ellipse;
                 }
+                if i.consume_key(egui::Modifiers::SHIFT, egui::Key::T) {
+                    self.tool = Tool::Triangle;
+                }
+                if i.consume_key(egui::Modifiers::SHIFT, egui::Key::P) {
+                    self.tool = Tool::Parallelogram;
+                }
+                if i.consume_key(egui::Modifiers::SHIFT, egui::Key::Z) {
+                    self.tool = Tool::Trapezoid;
+                }
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::L) {
                     self.tool = Tool::Line;
                 }
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::A) {
                     self.tool = Tool::Arrow;
+                }
+                if i.consume_key(egui::Modifiers::SHIFT, egui::Key::A) {
+                    self.tool = Tool::BidirectionalArrow;
+                }
+                if i.consume_key(egui::Modifiers::SHIFT, egui::Key::L) {
+                    self.tool = Tool::Polyline;
                 }
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::P) {
                     self.tool = Tool::Pen;
@@ -1244,8 +1276,13 @@ impl eframe::App for DiagramApp {
                 tool_button(ui, "Select (V)", Tool::Select, &mut self.tool);
                 tool_button(ui, "Rect (R)", Tool::Rectangle, &mut self.tool);
                 tool_button(ui, "Ellipse (O)", Tool::Ellipse, &mut self.tool);
+                tool_button(ui, "△ (⇧T)", Tool::Triangle, &mut self.tool);
+                tool_button(ui, "▱ (⇧P)", Tool::Parallelogram, &mut self.tool);
+                tool_button(ui, "⏢ (⇧Z)", Tool::Trapezoid, &mut self.tool);
                 tool_button(ui, "Line (L)", Tool::Line, &mut self.tool);
                 tool_button(ui, "Arrow (A)", Tool::Arrow, &mut self.tool);
+                tool_button(ui, "↔ (⇧A)", Tool::BidirectionalArrow, &mut self.tool);
+                tool_button(ui, "⌇ (⇧L)", Tool::Polyline, &mut self.tool);
                 tool_button(ui, "Pen (P)", Tool::Pen, &mut self.tool);
                 tool_button(ui, "Text (T)", Tool::Text, &mut self.tool);
                 tool_button(ui, "Pan (Space)", Tool::Pan, &mut self.tool);
@@ -1300,7 +1337,10 @@ impl eframe::App for DiagramApp {
                                 self.editing_text_id = Some(selected_id);
                             }
                             model::ElementKind::Rect { rect, label }
-                            | model::ElementKind::Ellipse { rect, label } => {
+                            | model::ElementKind::Ellipse { rect, label }
+                            | model::ElementKind::Triangle { rect, label }
+                            | model::ElementKind::Parallelogram { rect, label }
+                            | model::ElementKind::Trapezoid { rect, label } => {
                                 ui.separator();
                                 ui.label("Label");
                                 let response =
@@ -1497,11 +1537,19 @@ impl eframe::App for DiagramApp {
             }
 
             if response.secondary_clicked() {
-                self.context_world_pos = pointer_world;
-                self.context_hit = pointer_world.and_then(|p| self.topmost_hit(p, threshold_world));
-                if let Some(hit) = self.context_hit {
-                    if !self.selected.contains(&hit) {
-                        self.set_selection_single(hit);
+                if let Some(InProgress::Polyline { points, current, .. }) = &mut self.in_progress {
+                    if let Some(world_pos) = pointer_world {
+                        points.push(*current);
+                        *current = world_pos;
+                    }
+                } else {
+                    self.context_world_pos = pointer_world;
+                    self.context_hit =
+                        pointer_world.and_then(|p| self.topmost_hit(p, threshold_world));
+                    if let Some(hit) = self.context_hit {
+                        if !self.selected.contains(&hit) {
+                            self.set_selection_single(hit);
+                        }
                     }
                 }
             }
@@ -1516,6 +1564,9 @@ impl eframe::App for DiagramApp {
                                 model::ElementKind::Text { .. }
                                     | model::ElementKind::Rect { .. }
                                     | model::ElementKind::Ellipse { .. }
+                                    | model::ElementKind::Triangle { .. }
+                                    | model::ElementKind::Parallelogram { .. }
+                                    | model::ElementKind::Trapezoid { .. }
                             );
                             if has_text {
                                 self.set_selection_single(hit_id);
@@ -1555,7 +1606,11 @@ impl eframe::App for DiagramApp {
                                 });
                             }
                         }
-                        Tool::Rectangle | Tool::Ellipse => {
+                        Tool::Rectangle
+                        | Tool::Ellipse
+                        | Tool::Triangle
+                        | Tool::Parallelogram
+                        | Tool::Trapezoid => {
                             self.in_progress = Some(InProgress::DragShape {
                                 start: world_pos,
                                 current: world_pos,
@@ -1565,14 +1620,28 @@ impl eframe::App for DiagramApp {
                             self.in_progress = Some(InProgress::DragLine {
                                 start: world_pos,
                                 current: world_pos,
-                                arrow: false,
+                                arrow_style: model::ArrowStyle::None,
                             });
                         }
                         Tool::Arrow => {
                             self.in_progress = Some(InProgress::DragLine {
                                 start: world_pos,
                                 current: world_pos,
-                                arrow: true,
+                                arrow_style: model::ArrowStyle::End,
+                            });
+                        }
+                        Tool::BidirectionalArrow => {
+                            self.in_progress = Some(InProgress::DragLine {
+                                start: world_pos,
+                                current: world_pos,
+                                arrow_style: model::ArrowStyle::Both,
+                            });
+                        }
+                        Tool::Polyline => {
+                            self.in_progress = Some(InProgress::Polyline {
+                                points: vec![world_pos],
+                                current: world_pos,
+                                arrow_style: model::ArrowStyle::None,
                             });
                         }
                         Tool::Pen => {
@@ -1611,6 +1680,7 @@ impl eframe::App for DiagramApp {
                         match in_progress {
                             InProgress::DragShape { current, .. } => *current = world_pos,
                             InProgress::DragLine { current, .. } => *current = world_pos,
+                            InProgress::Polyline { current, .. } => *current = world_pos,
                             InProgress::Pen { points } => {
                                 if points.last().copied() != Some(world_pos) {
                                     points.push(world_pos);
@@ -1652,6 +1722,18 @@ impl eframe::App for DiagramApp {
                                         rect,
                                         label: String::new(),
                                     },
+                                    Tool::Triangle => model::ElementKind::Triangle {
+                                        rect,
+                                        label: String::new(),
+                                    },
+                                    Tool::Parallelogram => model::ElementKind::Parallelogram {
+                                        rect,
+                                        label: String::new(),
+                                    },
+                                    Tool::Trapezoid => model::ElementKind::Trapezoid {
+                                        rect,
+                                        label: String::new(),
+                                    },
                                     _ => model::ElementKind::Rect {
                                         rect,
                                         label: String::new(),
@@ -1672,7 +1754,7 @@ impl eframe::App for DiagramApp {
                         InProgress::DragLine {
                             start,
                             current,
-                            arrow,
+                            arrow_style,
                         } => {
                             if (current - start).length() >= threshold_world {
                                 self.push_undo();
@@ -1695,6 +1777,10 @@ impl eframe::App for DiagramApp {
                                     .as_ref()
                                     .and_then(|b| resolve_binding_point(&self.doc, b))
                                     .unwrap_or(current);
+                                let arrow = matches!(
+                                    arrow_style,
+                                    model::ArrowStyle::End | model::ArrowStyle::Both
+                                );
                                 let element = model::Element {
                                     id,
                                     group_id: None,
@@ -1704,8 +1790,37 @@ impl eframe::App for DiagramApp {
                                         a: model::Point::from_pos2(a),
                                         b: model::Point::from_pos2(b),
                                         arrow,
+                                        arrow_style,
                                         start_binding,
                                         end_binding,
+                                    },
+                                    style: self.style,
+                                };
+                                self.doc.elements.push(element);
+                                self.set_selection_single(id);
+                            }
+                        }
+                        InProgress::Polyline {
+                            points,
+                            current,
+                            arrow_style,
+                        } => {
+                            let mut pts = points;
+                            pts.push(current);
+                            if pts.len() >= 2 {
+                                self.push_undo();
+                                let id = self.allocate_id();
+                                let element = model::Element {
+                                    id,
+                                    group_id: None,
+                                    rotation: 0.0,
+                                    snap_enabled: true,
+                                    kind: model::ElementKind::Polyline {
+                                        points: pts
+                                            .into_iter()
+                                            .map(model::Point::from_pos2)
+                                            .collect(),
+                                        arrow_style,
                                     },
                                     style: self.style,
                                 };
@@ -1801,7 +1916,10 @@ impl eframe::App for DiagramApp {
                                 )
                             }
                             model::ElementKind::Rect { rect, .. }
-                            | model::ElementKind::Ellipse { rect, .. } => {
+                            | model::ElementKind::Ellipse { rect, .. }
+                            | model::ElementKind::Triangle { rect, .. }
+                            | model::ElementKind::Parallelogram { rect, .. }
+                            | model::ElementKind::Trapezoid { rect, .. } => {
                                 let world_rect = rect.to_rect();
                                 let margin = 10.0;
                                 let edit_rect = egui::Rect::from_center_size(
@@ -1847,8 +1965,13 @@ impl eframe::App for DiagramApp {
                                         let text_to_edit: &mut String =
                                             match &mut self.doc.elements[text_ptr].kind {
                                                 model::ElementKind::Text { text, .. } => text,
-                                                model::ElementKind::Rect { label, .. } => label,
-                                                model::ElementKind::Ellipse { label, .. } => label,
+                                                model::ElementKind::Rect { label, .. }
+                                                | model::ElementKind::Ellipse { label, .. }
+                                                | model::ElementKind::Triangle { label, .. }
+                                                | model::ElementKind::Parallelogram { label, .. }
+                                                | model::ElementKind::Trapezoid { label, .. } => {
+                                                    label
+                                                }
                                                 _ => {
                                                     self.inline_text_editing = false;
                                                     return;
@@ -2062,6 +2185,47 @@ fn style_editor(ui: &mut egui::Ui, style: &mut model::Style) -> bool {
     changed |= ui
         .add(egui::Slider::new(&mut style.stroke.width, 0.5..=12.0).text("Width"))
         .changed();
+    ui.horizontal(|ui| {
+        ui.label("Style:");
+        egui::ComboBox::from_id_salt("line_style")
+            .selected_text(match style.stroke.line_style {
+                model::LineStyle::Solid => "Solid",
+                model::LineStyle::Dashed => "Dashed",
+                model::LineStyle::Dotted => "Dotted",
+            })
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_value(
+                        &mut style.stroke.line_style,
+                        model::LineStyle::Solid,
+                        "Solid",
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .selectable_value(
+                        &mut style.stroke.line_style,
+                        model::LineStyle::Dashed,
+                        "Dashed",
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .selectable_value(
+                        &mut style.stroke.line_style,
+                        model::LineStyle::Dotted,
+                        "Dotted",
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+    });
     ui.separator();
     ui.label("Fill");
     let mut fill_enabled = style.fill.is_some();
@@ -2199,23 +2363,148 @@ fn draw_element(
                 draw_polygon_selection(painter, &points);
             }
         }
+        model::ElementKind::Triangle { rect, label } => {
+            let points =
+                rotated_triangle_points_screen(origin, view, rect.to_rect(), element.rotation);
+            painter.add(egui::Shape::convex_polygon(
+                points.clone(),
+                fill.unwrap_or(egui::Color32::TRANSPARENT),
+                stroke,
+            ));
+            if !label.is_empty() {
+                let center_world = rect.to_rect().center();
+                let center_screen = view.world_to_screen(origin, center_world);
+                draw_rotated_text(
+                    painter,
+                    center_screen,
+                    label,
+                    element.style.text_size * view.zoom,
+                    element.style.text_color.to_color32(),
+                    element.rotation,
+                );
+            }
+            if is_selected {
+                draw_polygon_selection(painter, &points);
+            }
+        }
+        model::ElementKind::Parallelogram { rect, label } => {
+            let points =
+                rotated_parallelogram_points_screen(origin, view, rect.to_rect(), element.rotation);
+            painter.add(egui::Shape::convex_polygon(
+                points.clone(),
+                fill.unwrap_or(egui::Color32::TRANSPARENT),
+                stroke,
+            ));
+            if !label.is_empty() {
+                let center_world = rect.to_rect().center();
+                let center_screen = view.world_to_screen(origin, center_world);
+                draw_rotated_text(
+                    painter,
+                    center_screen,
+                    label,
+                    element.style.text_size * view.zoom,
+                    element.style.text_color.to_color32(),
+                    element.rotation,
+                );
+            }
+            if is_selected {
+                draw_polygon_selection(painter, &points);
+            }
+        }
+        model::ElementKind::Trapezoid { rect, label } => {
+            let points =
+                rotated_trapezoid_points_screen(origin, view, rect.to_rect(), element.rotation);
+            painter.add(egui::Shape::convex_polygon(
+                points.clone(),
+                fill.unwrap_or(egui::Color32::TRANSPARENT),
+                stroke,
+            ));
+            if !label.is_empty() {
+                let center_world = rect.to_rect().center();
+                let center_screen = view.world_to_screen(origin, center_world);
+                draw_rotated_text(
+                    painter,
+                    center_screen,
+                    label,
+                    element.style.text_size * view.zoom,
+                    element.style.text_color.to_color32(),
+                    element.rotation,
+                );
+            }
+            if is_selected {
+                draw_polygon_selection(painter, &points);
+            }
+        }
         model::ElementKind::Line {
             a,
             b,
             arrow,
+            arrow_style,
             start_binding,
             end_binding,
         } => {
             let (a, b) = resolved_line_endpoints_world(doc, *a, *b, start_binding, end_binding);
             let a = view.world_to_screen(origin, a);
             let b = view.world_to_screen(origin, b);
-            painter.line_segment([a, b], stroke);
-            if *arrow {
+            draw_styled_line(painter, a, b, stroke, element.style.stroke.line_style);
+            let has_end_arrow = *arrow
+                || matches!(
+                    arrow_style,
+                    model::ArrowStyle::End | model::ArrowStyle::Both
+                );
+            let has_start_arrow = matches!(
+                arrow_style,
+                model::ArrowStyle::Start | model::ArrowStyle::Both
+            );
+            if has_end_arrow {
                 draw_arrowhead(painter, a, b, stroke);
+            }
+            if has_start_arrow {
+                draw_arrowhead(painter, b, a, stroke);
             }
             if is_selected {
                 let r = egui::Rect::from_two_pos(a, b).expand(6.0);
                 draw_selection_bounds(painter, r);
+            }
+        }
+        model::ElementKind::Polyline {
+            points,
+            arrow_style,
+        } => {
+            if points.len() >= 2 {
+                let pts: Vec<egui::Pos2> = points
+                    .iter()
+                    .map(|p| view.world_to_screen(origin, p.to_pos2()))
+                    .collect();
+                draw_styled_polyline(painter, &pts, stroke, element.style.stroke.line_style);
+                let has_end_arrow = matches!(
+                    arrow_style,
+                    model::ArrowStyle::End | model::ArrowStyle::Both
+                );
+                let has_start_arrow = matches!(
+                    arrow_style,
+                    model::ArrowStyle::Start | model::ArrowStyle::Both
+                );
+                if has_end_arrow && pts.len() >= 2 {
+                    let last = pts[pts.len() - 1];
+                    let second_last = pts[pts.len() - 2];
+                    draw_arrowhead(painter, second_last, last, stroke);
+                }
+                if has_start_arrow && pts.len() >= 2 {
+                    let first = pts[0];
+                    let second = pts[1];
+                    draw_arrowhead(painter, second, first, stroke);
+                }
+                if is_selected {
+                    let mut b: Option<egui::Rect> = None;
+                    for p in &pts {
+                        let r = egui::Rect::from_min_max(*p, *p);
+                        b = Some(b.map(|prev| prev.union(r)).unwrap_or(r));
+                    }
+                    if let Some(b) = b {
+                        draw_selection_bounds(painter, b.expand(6.0));
+                    }
+                }
             }
         }
         model::ElementKind::Pen { points } => {
@@ -2275,30 +2564,100 @@ fn draw_in_progress(
     );
     match in_progress {
         InProgress::DragShape { start, current } => {
-            let r = egui::Rect::from_two_pos(
-                view.world_to_screen(origin, *start),
-                view.world_to_screen(origin, *current),
-            );
+            let world_rect = egui::Rect::from_two_pos(*start, *current);
             match tool {
-                Tool::Rectangle => painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle),
-                Tool::Ellipse => painter.add(egui::Shape::ellipse_stroke(
-                    r.center(),
-                    r.size() * 0.5,
-                    stroke,
-                )),
-                _ => painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle),
+                Tool::Rectangle => {
+                    let r = egui::Rect::from_two_pos(
+                        view.world_to_screen(origin, *start),
+                        view.world_to_screen(origin, *current),
+                    );
+                    painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
+                }
+                Tool::Ellipse => {
+                    let r = egui::Rect::from_two_pos(
+                        view.world_to_screen(origin, *start),
+                        view.world_to_screen(origin, *current),
+                    );
+                    painter.add(egui::Shape::ellipse_stroke(
+                        r.center(),
+                        r.size() * 0.5,
+                        stroke,
+                    ));
+                }
+                Tool::Triangle => {
+                    let pts = rotated_triangle_points_screen(origin, view, world_rect, 0.0);
+                    painter.add(egui::Shape::closed_line(pts, stroke));
+                }
+                Tool::Parallelogram => {
+                    let pts = rotated_parallelogram_points_screen(origin, view, world_rect, 0.0);
+                    painter.add(egui::Shape::closed_line(pts, stroke));
+                }
+                Tool::Trapezoid => {
+                    let pts = rotated_trapezoid_points_screen(origin, view, world_rect, 0.0);
+                    painter.add(egui::Shape::closed_line(pts, stroke));
+                }
+                _ => {
+                    let r = egui::Rect::from_two_pos(
+                        view.world_to_screen(origin, *start),
+                        view.world_to_screen(origin, *current),
+                    );
+                    painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
+                }
             };
         }
         InProgress::DragLine {
             start,
             current,
-            arrow,
+            arrow_style,
         } => {
             let a = view.world_to_screen(origin, *start);
             let b = view.world_to_screen(origin, *current);
-            painter.line_segment([a, b], stroke);
-            if *arrow {
+            draw_styled_line(painter, a, b, stroke, style.stroke.line_style);
+            let has_end_arrow = matches!(
+                arrow_style,
+                model::ArrowStyle::End | model::ArrowStyle::Both
+            );
+            let has_start_arrow = matches!(
+                arrow_style,
+                model::ArrowStyle::Start | model::ArrowStyle::Both
+            );
+            if has_end_arrow {
                 draw_arrowhead(painter, a, b, stroke);
+            }
+            if has_start_arrow {
+                draw_arrowhead(painter, b, a, stroke);
+            }
+        }
+        InProgress::Polyline {
+            points,
+            current,
+            arrow_style,
+        } => {
+            let mut all_pts: Vec<egui::Pos2> = points
+                .iter()
+                .map(|p| view.world_to_screen(origin, *p))
+                .collect();
+            all_pts.push(view.world_to_screen(origin, *current));
+            if all_pts.len() >= 2 {
+                draw_styled_polyline(painter, &all_pts, stroke, style.stroke.line_style);
+                let has_end_arrow = matches!(
+                    arrow_style,
+                    model::ArrowStyle::End | model::ArrowStyle::Both
+                );
+                let has_start_arrow = matches!(
+                    arrow_style,
+                    model::ArrowStyle::Start | model::ArrowStyle::Both
+                );
+                if has_end_arrow {
+                    let last = all_pts[all_pts.len() - 1];
+                    let second_last = all_pts[all_pts.len() - 2];
+                    draw_arrowhead(painter, second_last, last, stroke);
+                }
+                if has_start_arrow && all_pts.len() >= 2 {
+                    let first = all_pts[0];
+                    let second = all_pts[1];
+                    draw_arrowhead(painter, second, first, stroke);
+                }
             }
         }
         InProgress::Pen { points } => {
@@ -2430,6 +2789,154 @@ fn rotated_ellipse_points_screen(
         .collect()
 }
 
+fn rotated_triangle_points_screen(
+    origin: egui::Pos2,
+    view: &View,
+    rect: egui::Rect,
+    rotation: f32,
+) -> Vec<egui::Pos2> {
+    let center = rect.center();
+    let half_w = rect.width() * 0.5;
+    let half_h = rect.height() * 0.5;
+    let corners = [
+        egui::vec2(0.0, -half_h),
+        egui::vec2(half_w, half_h),
+        egui::vec2(-half_w, half_h),
+    ];
+    corners
+        .into_iter()
+        .map(|v| {
+            let w = center + rotate_vec2(v, rotation);
+            view.world_to_screen(origin, w)
+        })
+        .collect()
+}
+
+fn rotated_parallelogram_points_screen(
+    origin: egui::Pos2,
+    view: &View,
+    rect: egui::Rect,
+    rotation: f32,
+) -> Vec<egui::Pos2> {
+    let center = rect.center();
+    let half_w = rect.width() * 0.5;
+    let half_h = rect.height() * 0.5;
+    let skew = half_w * 0.25;
+    let corners = [
+        egui::vec2(-half_w + skew, -half_h),
+        egui::vec2(half_w + skew, -half_h),
+        egui::vec2(half_w - skew, half_h),
+        egui::vec2(-half_w - skew, half_h),
+    ];
+    corners
+        .into_iter()
+        .map(|v| {
+            let w = center + rotate_vec2(v, rotation);
+            view.world_to_screen(origin, w)
+        })
+        .collect()
+}
+
+fn rotated_trapezoid_points_screen(
+    origin: egui::Pos2,
+    view: &View,
+    rect: egui::Rect,
+    rotation: f32,
+) -> Vec<egui::Pos2> {
+    let center = rect.center();
+    let half_w = rect.width() * 0.5;
+    let half_h = rect.height() * 0.5;
+    let top_inset = half_w * 0.25;
+    let corners = [
+        egui::vec2(-half_w + top_inset, -half_h),
+        egui::vec2(half_w - top_inset, -half_h),
+        egui::vec2(half_w, half_h),
+        egui::vec2(-half_w, half_h),
+    ];
+    corners
+        .into_iter()
+        .map(|v| {
+            let w = center + rotate_vec2(v, rotation);
+            view.world_to_screen(origin, w)
+        })
+        .collect()
+}
+
+fn draw_styled_line(
+    painter: &egui::Painter,
+    a: egui::Pos2,
+    b: egui::Pos2,
+    stroke: egui::Stroke,
+    line_style: model::LineStyle,
+) {
+    match line_style {
+        model::LineStyle::Solid => {
+            painter.line_segment([a, b], stroke);
+        }
+        model::LineStyle::Dashed => {
+            draw_dashed_line(painter, a, b, stroke, 10.0, 5.0);
+        }
+        model::LineStyle::Dotted => {
+            draw_dashed_line(painter, a, b, stroke, 2.0, 4.0);
+        }
+    }
+}
+
+fn draw_styled_polyline(
+    painter: &egui::Painter,
+    points: &[egui::Pos2],
+    stroke: egui::Stroke,
+    line_style: model::LineStyle,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    match line_style {
+        model::LineStyle::Solid => {
+            painter.add(egui::Shape::line(points.to_vec(), stroke));
+        }
+        model::LineStyle::Dashed | model::LineStyle::Dotted => {
+            let (dash, gap) = if line_style == model::LineStyle::Dashed {
+                (10.0, 5.0)
+            } else {
+                (2.0, 4.0)
+            };
+            for pair in points.windows(2) {
+                draw_dashed_line(painter, pair[0], pair[1], stroke, dash, gap);
+            }
+        }
+    }
+}
+
+fn draw_dashed_line(
+    painter: &egui::Painter,
+    a: egui::Pos2,
+    b: egui::Pos2,
+    stroke: egui::Stroke,
+    dash_len: f32,
+    gap_len: f32,
+) {
+    let v = b - a;
+    let len = v.length();
+    if len <= f32::EPSILON {
+        return;
+    }
+    let dir = v / len;
+    let mut pos = 0.0;
+    let mut drawing = true;
+    while pos < len {
+        let seg_len = if drawing { dash_len } else { gap_len };
+        let next_pos = (pos + seg_len).min(len);
+        if drawing {
+            let start = a + dir * pos;
+            let end = a + dir * next_pos;
+            painter.line_segment([start, end], stroke);
+        }
+        pos = next_pos;
+        drawing = !drawing;
+    }
+}
+
 #[allow(dead_code)]
 fn aabb_of_points(points: &[egui::Pos2]) -> egui::Rect {
     let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
@@ -2506,7 +3013,11 @@ fn topmost_bind_target_id(
 ) -> Option<u64> {
     for element in doc.elements.iter().rev() {
         match &element.kind {
-            model::ElementKind::Rect { .. } | model::ElementKind::Ellipse { .. } => {
+            model::ElementKind::Rect { .. }
+            | model::ElementKind::Ellipse { .. }
+            | model::ElementKind::Triangle { .. }
+            | model::ElementKind::Parallelogram { .. }
+            | model::ElementKind::Trapezoid { .. } => {
                 if hit_test_element(doc, element, world_pos, threshold_world) {
                     return Some(element.id);
                 }
@@ -2531,8 +3042,11 @@ fn compute_binding_for_element(
     world_pos: egui::Pos2,
 ) -> Option<model::Binding> {
     let rect = match &element.kind {
-        model::ElementKind::Rect { rect, .. } => rect.to_rect(),
-        model::ElementKind::Ellipse { rect, .. } => rect.to_rect(),
+        model::ElementKind::Rect { rect, .. }
+        | model::ElementKind::Ellipse { rect, .. }
+        | model::ElementKind::Triangle { rect, .. }
+        | model::ElementKind::Parallelogram { rect, .. }
+        | model::ElementKind::Trapezoid { rect, .. } => rect.to_rect(),
         _ => return None,
     };
     let size = rect.size();
@@ -2546,7 +3060,10 @@ fn compute_binding_for_element(
     nx = nx.clamp(-0.5, 0.5);
     ny = ny.clamp(-0.5, 0.5);
     match &element.kind {
-        model::ElementKind::Rect { .. } => {
+        model::ElementKind::Rect { .. }
+        | model::ElementKind::Triangle { .. }
+        | model::ElementKind::Parallelogram { .. }
+        | model::ElementKind::Trapezoid { .. } => {
             let dx = 0.5 - nx.abs();
             let dy = 0.5 - ny.abs();
             if dx < dy {
@@ -2578,8 +3095,11 @@ fn compute_binding_for_element(
 fn resolve_binding_point(doc: &model::Document, binding: &model::Binding) -> Option<egui::Pos2> {
     let element = doc.elements.iter().find(|e| e.id == binding.element_id)?;
     let (rect, rotation) = match &element.kind {
-        model::ElementKind::Rect { rect, .. } => Some((rect.to_rect(), element.rotation)),
-        model::ElementKind::Ellipse { rect, .. } => Some((rect.to_rect(), element.rotation)),
+        model::ElementKind::Rect { rect, .. }
+        | model::ElementKind::Ellipse { rect, .. }
+        | model::ElementKind::Triangle { rect, .. }
+        | model::ElementKind::Parallelogram { rect, .. }
+        | model::ElementKind::Trapezoid { rect, .. } => Some((rect.to_rect(), element.rotation)),
         _ => None,
     }?;
     let center = rect.center();
@@ -2609,7 +3129,11 @@ fn draw_arrowhead(painter: &egui::Painter, a: egui::Pos2, b: egui::Pos2, stroke:
 
 fn translate_element(element: &mut model::Element, delta_world: egui::Vec2) {
     match &mut element.kind {
-        model::ElementKind::Rect { rect, .. } | model::ElementKind::Ellipse { rect, .. } => {
+        model::ElementKind::Rect { rect, .. }
+        | model::ElementKind::Ellipse { rect, .. }
+        | model::ElementKind::Triangle { rect, .. }
+        | model::ElementKind::Parallelogram { rect, .. }
+        | model::ElementKind::Trapezoid { rect, .. } => {
             rect.min.x += delta_world.x;
             rect.min.y += delta_world.y;
             rect.max.x += delta_world.x;
@@ -2621,7 +3145,7 @@ fn translate_element(element: &mut model::Element, delta_world: egui::Vec2) {
             b.x += delta_world.x;
             b.y += delta_world.y;
         }
-        model::ElementKind::Pen { points } => {
+        model::ElementKind::Polyline { points, .. } | model::ElementKind::Pen { points } => {
             for p in points {
                 p.x += delta_world.x;
                 p.y += delta_world.y;
@@ -2636,7 +3160,11 @@ fn translate_element(element: &mut model::Element, delta_world: egui::Vec2) {
 
 fn snap_element_to_grid(element: &mut model::Element, grid_size: f32) {
     match &mut element.kind {
-        model::ElementKind::Rect { rect, .. } | model::ElementKind::Ellipse { rect, .. } => {
+        model::ElementKind::Rect { rect, .. }
+        | model::ElementKind::Ellipse { rect, .. }
+        | model::ElementKind::Triangle { rect, .. }
+        | model::ElementKind::Parallelogram { rect, .. }
+        | model::ElementKind::Trapezoid { rect, .. } => {
             let min = rect.min.to_pos2();
             let snapped_min = egui::pos2(
                 (min.x / grid_size).round() * grid_size,
@@ -2668,7 +3196,10 @@ fn hit_test_element(
     threshold_world: f32,
 ) -> bool {
     match &element.kind {
-        model::ElementKind::Rect { rect, .. } => {
+        model::ElementKind::Rect { rect, .. }
+        | model::ElementKind::Triangle { rect, .. }
+        | model::ElementKind::Parallelogram { rect, .. }
+        | model::ElementKind::Trapezoid { rect, .. } => {
             hit_test_rotated_rect(rect.to_rect(), element.rotation, world_pos, threshold_world)
         }
         model::ElementKind::Ellipse { rect, .. } => {
@@ -2685,7 +3216,7 @@ fn hit_test_element(
             model::distance_to_segment(world_pos, a, b)
                 <= (threshold_world + element.style.stroke.width)
         }
-        model::ElementKind::Pen { points } => {
+        model::ElementKind::Polyline { points, .. } | model::ElementKind::Pen { points } => {
             if points.len() < 2 {
                 return false;
             }
@@ -2856,13 +3387,22 @@ fn element_label(element: &model::Element) -> String {
     match &element.kind {
         model::ElementKind::Rect { .. } => format!("Rect {}{}", element.id, group),
         model::ElementKind::Ellipse { .. } => format!("Ellipse {}{}", element.id, group),
-        model::ElementKind::Line { arrow, .. } => {
-            if *arrow {
+        model::ElementKind::Triangle { .. } => format!("Triangle {}{}", element.id, group),
+        model::ElementKind::Parallelogram { .. } => format!("Parallelogram {}{}", element.id, group),
+        model::ElementKind::Trapezoid { .. } => format!("Trapezoid {}{}", element.id, group),
+        model::ElementKind::Line { arrow, arrow_style, .. } => {
+            let is_arrow = *arrow
+                || matches!(
+                    arrow_style,
+                    model::ArrowStyle::End | model::ArrowStyle::Start | model::ArrowStyle::Both
+                );
+            if is_arrow {
                 format!("Arrow {}{}", element.id, group)
             } else {
                 format!("Line {}{}", element.id, group)
             }
         }
+        model::ElementKind::Polyline { .. } => format!("Polyline {}{}", element.id, group),
         model::ElementKind::Pen { .. } => format!("Pen {}{}", element.id, group),
         model::ElementKind::Text { .. } => format!("Text {}{}", element.id, group),
     }

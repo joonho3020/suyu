@@ -61,10 +61,20 @@ impl Rgba {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub enum LineStyle {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StrokeStyle {
     pub color: Rgba,
     pub width: f32,
+    #[serde(default)]
+    pub line_style: LineStyle,
 }
 
 impl Default for StrokeStyle {
@@ -77,6 +87,7 @@ impl Default for StrokeStyle {
                 a: 255,
             },
             width: 2.0,
+            line_style: LineStyle::Solid,
         }
     }
 }
@@ -144,6 +155,15 @@ pub struct Binding {
     pub norm: Point,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub enum ArrowStyle {
+    #[default]
+    None,
+    End,
+    Start,
+    Both,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ElementKind {
     Rect {
@@ -156,14 +176,37 @@ pub enum ElementKind {
         #[serde(default)]
         label: String,
     },
+    Triangle {
+        rect: RectF,
+        #[serde(default)]
+        label: String,
+    },
+    Parallelogram {
+        rect: RectF,
+        #[serde(default)]
+        label: String,
+    },
+    Trapezoid {
+        rect: RectF,
+        #[serde(default)]
+        label: String,
+    },
     Line {
         a: Point,
         b: Point,
+        #[serde(default)]
         arrow: bool,
+        #[serde(default)]
+        arrow_style: ArrowStyle,
         #[serde(default)]
         start_binding: Option<Binding>,
         #[serde(default)]
         end_binding: Option<Binding>,
+    },
+    Polyline {
+        points: Vec<Point>,
+        #[serde(default)]
+        arrow_style: ArrowStyle,
     },
     Pen {
         points: Vec<Point>,
@@ -177,7 +220,10 @@ pub enum ElementKind {
 impl Element {
     pub fn bounds(&self) -> egui::Rect {
         match &self.kind {
-            ElementKind::Rect { rect, .. } => {
+            ElementKind::Rect { rect, .. }
+            | ElementKind::Triangle { rect, .. }
+            | ElementKind::Parallelogram { rect, .. }
+            | ElementKind::Trapezoid { rect, .. } => {
                 rotated_rect_aabb(rect.to_rect(), self.rotation).expand(self.style.stroke.width)
             }
             ElementKind::Ellipse { rect, .. } => {
@@ -186,7 +232,7 @@ impl Element {
             ElementKind::Line { a, b, .. } => {
                 egui::Rect::from_two_pos(a.to_pos2(), b.to_pos2()).expand(self.style.stroke.width)
             }
-            ElementKind::Pen { points } => {
+            ElementKind::Polyline { points, .. } | ElementKind::Pen { points } => {
                 let mut it = points.iter();
                 let Some(first) = it.next() else {
                     return egui::Rect::NOTHING;
