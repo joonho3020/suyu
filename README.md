@@ -3,6 +3,7 @@
 
 - What you see is what you get
 - Tight keyboard integration
+- Expose APIs so that diagrams can be generated programmatically
 
 - [x] resize handles
 - [x] rotate
@@ -30,14 +31,15 @@ Add the following features:
     - Grouping
         - [ ] It would be nice if it showed a bounding box around grouped objects
         - [ ] Grouping should be hierarchical (group objects 1, 2 into G1 & group G1 & object 3 into G2. When ungrouping G2, we should get G1 & object 3)
-    - [ ] Adjust moving speed
 - Editor setting
+    - [ ] Adjust speed of moving objects
     - [ ] Save to svg
     - [ ] Colorschemes/pallete registration
     - [ ] Persistent settings
     - [ ] Change to select mode using esc
     - [ ] Keyboard prefix + fzf search to choose editing actions
     - [ ] Multi-scene support?
+    - [ ] Better app-icon
 
 <!-- - Object traits -->
 <!-- - [x] Rotate -->
