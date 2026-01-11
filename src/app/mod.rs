@@ -191,9 +191,6 @@ pub struct DiagramApp {
     grid_size: f32,
     move_step: f32,
     move_step_fast: f32,
-    palettes: Vec<settings::StylePalette>,
-    active_palette: Option<usize>,
-    new_palette_name: String,
     space_pan_happened: bool,
     command_palette: command_palette::CommandPalette,
     color_themes: Vec<settings::ColorTheme>,
@@ -222,12 +219,7 @@ impl DiagramApp {
         let settings = settings::load_settings(&settings_path)
             .or_else(|| settings::load_settings("settings.json"))
             .unwrap_or_default();
-        let mut style = model::Style::default_for_shapes();
-        if let Some(idx) = settings.active_palette {
-            if let Some(p) = settings.palettes.get(idx) {
-                style = p.style.clone();
-            }
-        }
+        let style = model::Style::default_for_shapes();
 
         let loaded_fonts = if let Some(ref font_dir) = settings.font_directory {
             Self::load_custom_fonts(&cc.egui_ctx, font_dir)
@@ -267,9 +259,6 @@ impl DiagramApp {
             grid_size: settings.grid_size,
             move_step: settings.move_step,
             move_step_fast: settings.move_step_fast,
-            palettes: settings.palettes,
-            active_palette: settings.active_palette,
-            new_palette_name: String::new(),
             space_pan_happened: false,
             command_palette: command_palette::CommandPalette::default(),
             color_themes: settings.color_themes,

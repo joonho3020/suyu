@@ -1,13 +1,9 @@
-file_path = "diagram.json"
-svg_path = "diagram.svg"
 snap_to_grid = false
 grid_size = 64.0
 move_step = 1.0
 move_step_fast = 10.0
 apply_style_to_selection = true
-palettes = []
 active_color_theme = 0
-font_directory = "/Users/joonhohwangbo/Documents/fonts/SourceCodePro/"
 
 [[color_themes]]
 name = "tokyonight"

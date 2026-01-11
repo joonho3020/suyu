@@ -2,12 +2,6 @@ use crate::model;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Clone, Serialize, Deserialize)]
-pub(super) struct StylePalette {
-    pub name: String,
-    pub style: model::Style,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub(super) struct ColorTheme {
     pub name: String,
@@ -26,9 +20,6 @@ pub(super) struct AppSettings {
     pub move_step_fast: f32,
     pub apply_style_to_selection: bool,
     #[serde(default)]
-    pub palettes: Vec<StylePalette>,
-    pub active_palette: Option<usize>,
-    #[serde(default)]
     pub color_themes: Vec<ColorTheme>,
     #[serde(default)]
     pub active_color_theme: Option<usize>,
@@ -46,8 +37,6 @@ impl Default for AppSettings {
             move_step: 1.0,
             move_step_fast: 10.0,
             apply_style_to_selection: true,
-            palettes: Vec::new(),
-            active_palette: None,
             color_themes: Vec::new(),
             active_color_theme: None,
             font_directory: None,

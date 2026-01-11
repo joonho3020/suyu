@@ -890,8 +890,6 @@ impl DiagramApp {
             move_step: self.move_step,
             move_step_fast: self.move_step_fast,
             apply_style_to_selection: self.apply_style_to_selection,
-            palettes: self.palettes.clone(),
-            active_palette: self.active_palette,
             color_themes: self.color_themes.clone(),
             active_color_theme: self.active_color_theme,
             font_directory: self.font_directory.clone(),
@@ -945,8 +943,6 @@ impl DiagramApp {
         self.move_step = settings.move_step;
         self.move_step_fast = settings.move_step_fast;
         self.apply_style_to_selection = settings.apply_style_to_selection;
-        self.palettes = settings.palettes;
-        self.active_palette = settings.active_palette;
         self.color_themes = settings.color_themes;
         self.active_color_theme = settings.active_color_theme;
         self.font_directory = settings.font_directory.clone();
@@ -962,33 +958,6 @@ impl DiagramApp {
         } else {
             self.loaded_fonts.clear();
             self.status = Some("Settings reloaded".to_string());
-        }
-    }
-
-    pub(super) fn load_from_path(&mut self) {
-        match std::fs::read_to_string(&self.file_path) {
-            Ok(s) => match serde_json::from_str::<model::Document>(&s) {
-                Ok(doc) => {
-                    self.doc = doc;
-                    self.normalize_groups();
-                    self.next_id = self.doc.elements.iter().map(|e| e.id).max().unwrap_or(0) + 1;
-                    let max_group_in_elements = self
-                        .doc
-                        .elements
-                        .iter()
-                        .filter_map(|e| e.group_id)
-                        .max()
-                        .unwrap_or(0);
-                    let max_group_in_doc = self.doc.groups.iter().map(|g| g.id).max().unwrap_or(0);
-                    self.next_group_id = max_group_in_elements.max(max_group_in_doc) + 1;
-                    self.clear_selection();
-                    self.history.clear();
-                    self.future.clear();
-                    self.status = Some(format!("Loaded {}", self.file_path));
-                }
-                Err(e) => self.status = Some(format!("Parse failed: {e}")),
-            },
-            Err(e) => self.status = Some(format!("Load failed: {e}")),
         }
     }
 }
