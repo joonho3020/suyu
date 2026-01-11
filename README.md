@@ -1,7 +1,7 @@
-# Suyu
+# sansuyu
 
 A diagramming tool written in Rust.
-Supports exporting to SVG.
+Supports exporting to SVG (not for round-trip editing).
 
 ## Installation
 
@@ -9,17 +9,17 @@ Supports exporting to SVG.
 
 ```bash
 git clone <repository-url>
-cd suyu
+cd sansuyu
 cargo build --release
 ```
 
-The binary will be at `target/release/suyu`.
+The binary will be at `target/release/sansuyu`.
 
 ## Configuration
 
-Suyu looks for a configuration file in `~/.config/suyu.toml`
+sansuyu looks for a configuration file in `~/.config/sansuyu.toml`
 
-### Example `suyu.toml`
+### Example `sansuyu.toml`
 
 ```toml
 snap_to_grid = false
@@ -66,7 +66,7 @@ purple = "#bb9af7"
 
 ### Command Palette
 
-The command palette is the primary way to access all features in Suyu.
+The command palette is the primary way to access all features in sansuyu.
 It provides fuzzy search over all available commands.
 The command palette can be opened by pressing `Space`
 
@@ -119,14 +119,14 @@ The command palette can be opened by pressing `Space`
 To use custom fonts:
 
 1. Add `font_directory` to your config file pointing to a folder with `.ttf` or `.otf` files
-2. Restart Suyu or use `Settings: Reload` from the command palette
+2. Restart sansuyu or use `Settings: Reload` from the command palette
 3. Select the custom font via `Format: Set Custom Font...` command
 
 ### File Formats
 
 - **Diagrams**: Saved as JSON files (`.json`)
 - **Export**: SVG format for use in other applications
-- **Settings**: TOML format (`suyu.toml`)
+- **Settings**: TOML format (`sansuyu.toml`)
 
 ## Tips
 

@@ -203,7 +203,7 @@ pub struct DiagramApp {
 impl DiagramApp {
     fn config_path() -> Option<String> {
         if let Some(home) = std::env::var_os("HOME") {
-            let path = std::path::PathBuf::from(home).join(".config").join("suyu.toml");
+            let path = std::path::PathBuf::from(home).join(".config").join("sansuyu.toml");
             if path.exists() {
                 return Some(path.display().to_string());
             }

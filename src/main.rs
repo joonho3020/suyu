@@ -10,7 +10,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Suyu",
+        "SanSuYu",
         native_options,
         Box::new(|cc| Ok(Box::new(app::DiagramApp::new(cc)))),
     )
