@@ -7,6 +7,7 @@ mod actions;
 mod command_palette;
 mod doc_ops;
 mod geometry;
+mod help;
 mod interaction;
 mod render;
 mod settings;
@@ -194,10 +195,15 @@ pub struct DiagramApp {
     new_palette_name: String,
     space_pan_happened: bool,
     command_palette: command_palette::CommandPalette,
+    color_themes: Vec<settings::ColorTheme>,
+    active_color_theme: Option<usize>,
+    font_directory: Option<String>,
+    loaded_fonts: Vec<String>,
+    show_help: bool,
 }
 
 impl DiagramApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings_path = "settings.toml".to_string();
         let settings = settings::load_settings(&settings_path)
             .or_else(|| settings::load_settings("settings.json"))
@@ -205,9 +211,16 @@ impl DiagramApp {
         let mut style = model::Style::default_for_shapes();
         if let Some(idx) = settings.active_palette {
             if let Some(p) = settings.palettes.get(idx) {
-                style = p.style;
+                style = p.style.clone();
             }
         }
+
+        let loaded_fonts = if let Some(ref font_dir) = settings.font_directory {
+            Self::load_custom_fonts(&cc.egui_ctx, font_dir)
+        } else {
+            Vec::new()
+        };
+
         Self {
             doc: model::Document::default(),
             selected: HashSet::new(),
@@ -242,6 +255,56 @@ impl DiagramApp {
             new_palette_name: String::new(),
             space_pan_happened: false,
             command_palette: command_palette::CommandPalette::default(),
+            color_themes: settings.color_themes,
+            active_color_theme: settings.active_color_theme,
+            font_directory: settings.font_directory,
+            loaded_fonts,
+            show_help: false,
         }
+    }
+
+    pub(super) fn load_custom_fonts(ctx: &egui::Context, font_dir: &str) -> Vec<String> {
+        let path = std::path::Path::new(font_dir);
+        if !path.is_dir() {
+            return Vec::new();
+        }
+
+        let mut fonts = egui::FontDefinitions::default();
+        let mut loaded_names = Vec::new();
+
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let file_path = entry.path();
+                let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if !["ttf", "otf"].contains(&ext.to_lowercase().as_str()) {
+                    continue;
+                }
+
+                if let Ok(font_data) = std::fs::read(&file_path) {
+                    let font_name = file_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("custom")
+                        .to_string();
+
+                    fonts.font_data.insert(
+                        font_name.clone(),
+                        std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+                    );
+
+                    fonts
+                        .families
+                        .insert(egui::FontFamily::Name(font_name.clone().into()), vec![font_name.clone()]);
+
+                    loaded_names.push(font_name);
+                }
+            }
+        }
+
+        if !fonts.font_data.is_empty() {
+            ctx.set_fonts(fonts);
+        }
+
+        loaded_names
     }
 }

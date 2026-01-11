@@ -48,7 +48,7 @@ impl DiagramApp {
             selected: self.selected.iter().copied().collect(),
             next_id: self.next_id,
             next_group_id: self.next_group_id,
-            style: self.style,
+            style: self.style.clone(),
         }
     }
 
@@ -497,7 +497,7 @@ impl DiagramApp {
 
         self.push_undo();
         let id = self.allocate_id();
-        let mut style = self.style;
+        let mut style = self.style.clone();
         style.fill = None;
         self.doc.elements.push(model::Element {
             id,
@@ -802,13 +802,76 @@ impl DiagramApp {
             apply_style_to_selection: self.apply_style_to_selection,
             palettes: self.palettes.clone(),
             active_palette: self.active_palette,
+            color_themes: self.color_themes.clone(),
+            active_color_theme: self.active_color_theme,
+            font_directory: self.font_directory.clone(),
         }
+    }
+
+    pub(super) fn lookup_color_by_name(&self, name: &str) -> Option<model::Rgba> {
+        if let Some(idx) = self.active_color_theme {
+            if let Some(theme) = self.color_themes.get(idx) {
+                if let Some(color) = theme.get_color(name) {
+                    return Some(color);
+                }
+            }
+        }
+        for theme in &self.color_themes {
+            if let Some(color) = theme.get_color(name) {
+                return Some(color);
+            }
+        }
+        None
+    }
+
+    pub(super) fn all_color_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for theme in &self.color_themes {
+            for name in theme.colors.keys() {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+        names
     }
 
     pub(super) fn persist_settings(&mut self) {
         let snapshot = self.settings_snapshot();
         if let Err(e) = settings::save_settings(&self.settings_path, &snapshot) {
             self.status = Some(format!("Settings save failed: {e}"));
+        }
+    }
+
+    pub(super) fn reload_settings(&mut self, ctx: &egui::Context) {
+        let settings = settings::load_settings(&self.settings_path)
+            .or_else(|| settings::load_settings("settings.json"))
+            .unwrap_or_default();
+
+        self.file_path = settings.file_path;
+        self.svg_path = settings.svg_path;
+        self.snap_to_grid = settings.snap_to_grid;
+        self.grid_size = settings.grid_size;
+        self.move_step = settings.move_step;
+        self.move_step_fast = settings.move_step_fast;
+        self.apply_style_to_selection = settings.apply_style_to_selection;
+        self.palettes = settings.palettes;
+        self.active_palette = settings.active_palette;
+        self.color_themes = settings.color_themes;
+        self.active_color_theme = settings.active_color_theme;
+        self.font_directory = settings.font_directory.clone();
+
+        if let Some(ref font_dir) = settings.font_directory {
+            let loaded = super::DiagramApp::load_custom_fonts(ctx, font_dir);
+            if loaded.is_empty() {
+                self.status = Some(format!("Settings reloaded (no fonts found in {})", font_dir));
+            } else {
+                self.status = Some(format!("Settings reloaded, loaded {} font(s): {}", loaded.len(), loaded.join(", ")));
+            }
+            self.loaded_fonts = loaded;
+        } else {
+            self.loaded_fonts.clear();
+            self.status = Some("Settings reloaded".to_string());
         }
     }
 

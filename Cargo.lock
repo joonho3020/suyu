@@ -343,6 +343,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "fuzzy-matcher",
+ "image",
  "serde",
  "serde_json",
  "toml",

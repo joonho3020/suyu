@@ -97,10 +97,11 @@ fn svg_text_anchor(align: model::TextAlign) -> &'static str {
     }
 }
 
-fn svg_font_family(family: model::FontFamily) -> &'static str {
+fn svg_font_family(family: &model::FontFamily) -> String {
     match family {
-        model::FontFamily::Proportional => "sans-serif",
-        model::FontFamily::Monospace => "monospace",
+        model::FontFamily::Proportional => "sans-serif".to_string(),
+        model::FontFamily::Monospace => "monospace".to_string(),
+        model::FontFamily::Custom(name) => format!("'{}', sans-serif", name),
     }
 }
 
@@ -211,7 +212,7 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
                         p.x,
                         p.y,
                         e.style.text_size,
-                        svg_font_family(e.style.font_family),
+                        svg_font_family(&e.style.font_family),
                         rgb,
                         opacity,
                         svg_text_anchor(e.style.text_align),
@@ -250,7 +251,7 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
                         p.x,
                         p.y,
                         e.style.text_size,
-                        svg_font_family(e.style.font_family),
+                        svg_font_family(&e.style.font_family),
                         rgb,
                         opacity,
                         svg_text_anchor(e.style.text_align),
@@ -293,7 +294,7 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
                         p.x,
                         p.y,
                         e.style.text_size,
-                        svg_font_family(e.style.font_family),
+                        svg_font_family(&e.style.font_family),
                         rgb,
                         opacity,
                         svg_text_anchor(e.style.text_align),
@@ -336,7 +337,7 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
                         p.x,
                         p.y,
                         e.style.text_size,
-                        svg_font_family(e.style.font_family),
+                        svg_font_family(&e.style.font_family),
                         rgb,
                         opacity,
                         svg_text_anchor(e.style.text_align),
@@ -380,7 +381,7 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
                         p.x,
                         p.y,
                         e.style.text_size,
-                        svg_font_family(e.style.font_family),
+                        svg_font_family(&e.style.font_family),
                         rgb,
                         opacity,
                         svg_text_anchor(e.style.text_align),
@@ -465,7 +466,7 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
                     p.x,
                     p.y,
                     e.style.text_size,
-                    svg_font_family(e.style.font_family),
+                    svg_font_family(&e.style.font_family),
                     rgb,
                     opacity,
                     svg_text_anchor(e.style.text_align),

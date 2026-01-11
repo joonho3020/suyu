@@ -62,6 +62,9 @@ impl eframe::App for DiagramApp {
             }
             let skip_shortcuts = wants_keyboard || self.inline_text_editing || self.command_palette.open;
 
+            if i.consume_key(egui::Modifiers::NONE, egui::Key::F1) {
+                self.show_help = true;
+            }
             if !skip_shortcuts {
                 if i.consume_key(
                     egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
@@ -649,6 +652,17 @@ impl eframe::App for DiagramApp {
                         }
                     });
                 });
+                ui.menu_button("Help", |ui| {
+                    if ui.button("Show Help (F1)").clicked() {
+                        self.show_help = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Reload Settings").clicked() {
+                        self.reload_settings(ctx);
+                        ui.close_menu();
+                    }
+                });
                 ui.separator();
                 tool_button(ui, "V", Tool::Select, &mut self.tool);
                 tool_button(ui, "R", Tool::Rectangle, &mut self.tool);
@@ -686,8 +700,8 @@ impl eframe::App for DiagramApp {
                 if self.selected.len() == 1 {
                     let selected_id = *self.selected.iter().next().unwrap();
                     if let Some(idx) = self.element_index_by_id(selected_id) {
-                        let original_style = self.doc.elements[idx].style;
-                        let mut style = original_style;
+                        let original_style = self.doc.elements[idx].style.clone();
+                        let mut style = original_style.clone();
                         let style_changed = style_editor(ui, &mut style) && style != original_style;
 
                         let mut push_undo_on_focus = false;
@@ -943,21 +957,21 @@ impl eframe::App for DiagramApp {
                             self.push_undo();
                         }
                     } else {
-                        let mut style = self.style;
+                        let mut style = self.style.clone();
                         if style_editor(ui, &mut style) && style != self.style {
                             self.push_undo();
                             self.style = style;
                         }
                     }
                 } else {
-                    let mut style = self.style;
+                    let mut style = self.style.clone();
                     if style_editor(ui, &mut style) && style != self.style {
                         self.push_undo();
-                        self.style = style;
+                        self.style = style.clone();
                         if self.apply_style_to_selection && !self.selected.is_empty() {
                             for element in &mut self.doc.elements {
                                 if self.selected.contains(&element.id) {
-                                    element.style = style;
+                                    element.style = style.clone();
                                 }
                             }
                         }
@@ -985,14 +999,14 @@ impl eframe::App for DiagramApp {
                 if palette_selection != self.active_palette {
                     self.active_palette = palette_selection;
                     if let Some(idx) = self.active_palette {
-                        let style_to_apply = self.palettes.get(idx).map(|p| p.style);
+                        let style_to_apply = self.palettes.get(idx).map(|p| p.style.clone());
                         if let Some(style) = style_to_apply {
                             self.push_undo();
-                            self.style = style;
+                            self.style = style.clone();
                             if self.apply_style_to_selection && !self.selected.is_empty() {
                                 for element in &mut self.doc.elements {
                                     if self.selected.contains(&element.id) {
-                                        element.style = self.style;
+                                        element.style = style.clone();
                                     }
                                 }
                             }
@@ -1003,39 +1017,42 @@ impl eframe::App for DiagramApp {
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     ui.text_edit_singleline(&mut self.new_palette_name);
-                    if ui.button("Add").clicked() {
-                        let name = self.new_palette_name.trim().to_string();
-                        if !name.is_empty() {
-                            self.palettes.push(super::settings::StylePalette {
-                                name,
-                                style: self.style,
-                            });
-                            self.active_palette = Some(self.palettes.len() - 1);
-                            self.new_palette_name.clear();
+                });
+                let add_clicked = ui.button("Add").clicked();
+                if add_clicked {
+                    let name = self.new_palette_name.trim().to_string();
+                    if !name.is_empty() {
+                        self.palettes.push(super::settings::StylePalette {
+                            name,
+                            style: self.style.clone(),
+                        });
+                        self.active_palette = Some(self.palettes.len() - 1);
+                        self.new_palette_name.clear();
+                        self.persist_settings();
+                    }
+                }
+                let has_active = self
+                    .active_palette
+                    .is_some_and(|idx| idx < self.palettes.len());
+                let update_clicked = ui.add_enabled(has_active, egui::Button::new("Update")).clicked();
+                let delete_clicked = ui.add_enabled(has_active, egui::Button::new("Delete")).clicked();
+                if update_clicked {
+                    if let Some(idx) = self.active_palette {
+                        if idx < self.palettes.len() {
+                            self.palettes[idx].style = self.style.clone();
                             self.persist_settings();
                         }
                     }
-                });
-                ui.horizontal(|ui| {
-                    let has_active = self
-                        .active_palette
-                        .is_some_and(|idx| idx < self.palettes.len());
-                    if ui.add_enabled(has_active, egui::Button::new("Update")).clicked() {
-                        if let Some(idx) = self.active_palette {
-                            self.palettes[idx].style = self.style;
+                }
+                if delete_clicked {
+                    if let Some(idx) = self.active_palette {
+                        if idx < self.palettes.len() {
+                            self.palettes.remove(idx);
+                            self.active_palette = None;
                             self.persist_settings();
                         }
                     }
-                    if ui.add_enabled(has_active, egui::Button::new("Delete")).clicked() {
-                        if let Some(idx) = self.active_palette {
-                            if idx < self.palettes.len() {
-                                self.palettes.remove(idx);
-                                self.active_palette = None;
-                                self.persist_settings();
-                            }
-                        }
-                    }
-                });
+                }
 
                 ui.separator();
                 ui.heading("Grid & Snap");
@@ -1106,6 +1123,79 @@ impl eframe::App for DiagramApp {
                 });
 
                 ui.separator();
+                ui.heading("Color Themes");
+                let mut theme_selection = self.active_color_theme;
+                egui::ComboBox::from_id_salt("color_theme_select")
+                    .selected_text(match theme_selection {
+                        Some(idx) => self
+                            .color_themes
+                            .get(idx)
+                            .map(|t| t.name.as_str())
+                            .unwrap_or("None"),
+                        None => "None",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut theme_selection, None, "None");
+                        for (idx, t) in self.color_themes.iter().enumerate() {
+                            ui.selectable_value(&mut theme_selection, Some(idx), &t.name);
+                        }
+                    });
+                if theme_selection != self.active_color_theme {
+                    self.active_color_theme = theme_selection;
+                    self.persist_settings();
+                }
+                if !self.color_themes.is_empty() {
+                    ui.label("Available colors:");
+                    let names = self.all_color_names();
+                    if names.is_empty() {
+                        ui.label("(no colors defined)");
+                    } else {
+                        ui.horizontal_wrapped(|ui| {
+                            for name in names {
+                                if let Some(color) = self.lookup_color_by_name(&name) {
+                                    let c = color.to_color32();
+                                    ui.add_sized([60.0, 18.0], egui::Button::new(&name).fill(c));
+                                } else {
+                                    ui.label(&name);
+                                }
+                            }
+                        });
+                    }
+                }
+                ui.label("Define themes in settings.toml");
+
+                ui.separator();
+                ui.heading("Custom Fonts");
+                if self.loaded_fonts.is_empty() {
+                    ui.label("No custom fonts loaded");
+                } else {
+                    ui.label(format!("{} font(s) loaded:", self.loaded_fonts.len()));
+                    let font_names: Vec<String> = self.loaded_fonts.clone();
+                    let mut clicked_font: Option<String> = None;
+                    for font_name in &font_names {
+                        if ui.small_button(font_name).clicked() {
+                            clicked_font = Some(font_name.clone());
+                        }
+                    }
+                    if let Some(font_name) = clicked_font {
+                        self.push_undo();
+                        self.style.font_family = model::FontFamily::Custom(font_name.clone());
+                        if !self.selected.is_empty() {
+                            for e in &mut self.doc.elements {
+                                if self.selected.contains(&e.id) {
+                                    e.style.font_family = model::FontFamily::Custom(font_name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                let font_dir_text = self.font_directory.clone().unwrap_or_default();
+                if !font_dir_text.is_empty() {
+                    ui.small(format!("Dir: {}", font_dir_text));
+                }
+                ui.label("Set font_directory in settings.toml");
+
+                ui.separator();
                 ui.heading("Editor");
                 if ui
                     .add(egui::Slider::new(&mut self.move_step, 0.25..=32.0).text("Move"))
@@ -1123,10 +1213,10 @@ impl eframe::App for DiagramApp {
                 }
 
                 ui.separator();
-                ui.label("Shortcuts");
-                ui.label(
-                    "Space: command palette, ⌘⇧P: command palette, V/R/O/L/A/P/T: tools, Del: delete, Esc: select, ⌘S: save, ⌘⇧S: export SVG, ⌘O: load",
-                );
+                if ui.button("Show Help (F1)").clicked() {
+                    self.show_help = true;
+                }
+                ui.label("Shortcuts: Space/⌘⇧P: commands, V/R/O/L/A/P/T: tools");
                 });
             });
 
@@ -1319,7 +1409,7 @@ impl eframe::App for DiagramApp {
                         Tool::Text => {
                             self.push_undo();
                             let id = self.allocate_id();
-                            let mut style = self.style;
+                            let mut style = self.style.clone();
                             style.fill = None;
                             let element = model::Element {
                                 id,
@@ -1455,7 +1545,7 @@ impl eframe::App for DiagramApp {
                                     rotation: 0.0,
                                     snap_enabled: true,
                                     kind,
-                                    style: self.style,
+                                    style: self.style.clone(),
                                 };
                                 self.doc.elements.push(element);
                                 self.set_selection_single(id);
@@ -1504,7 +1594,7 @@ impl eframe::App for DiagramApp {
                                         start_binding,
                                         end_binding,
                                     },
-                                    style: self.style,
+                                    style: self.style.clone(),
                                 };
                                 self.doc.elements.push(element);
                                 self.set_selection_single(id);
@@ -1532,7 +1622,7 @@ impl eframe::App for DiagramApp {
                                             .collect(),
                                         arrow_style,
                                     },
-                                    style: self.style,
+                                    style: self.style.clone(),
                                 };
                                 self.doc.elements.push(element);
                                 self.set_selection_single(id);
@@ -1553,7 +1643,7 @@ impl eframe::App for DiagramApp {
                                             .map(model::Point::from_pos2)
                                             .collect(),
                                     },
-                                    style: self.style,
+                                    style: self.style.clone(),
                                 };
                                 self.doc.elements.push(element);
                                 self.set_selection_single(id);
@@ -1596,7 +1686,7 @@ impl eframe::App for DiagramApp {
                     &self.view,
                     in_progress,
                     self.tool,
-                    self.style,
+                    &self.style,
                 );
             }
             if self.tool == Tool::Select {
@@ -1888,5 +1978,7 @@ impl eframe::App for DiagramApp {
         } else if let Some(cmd) = cmd {
             super::command_palette::CommandPalette::execute(self, ctx, cmd);
         }
+
+        super::help::draw_help_window(ctx, &mut self.show_help);
     }
 }

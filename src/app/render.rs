@@ -17,12 +17,15 @@ pub(super) fn tool_button(ui: &mut egui::Ui, label: &str, tool: Tool, selected: 
     }
 }
 
-fn font_id(font_size: f32, family: model::FontFamily) -> egui::FontId {
+fn font_id(font_size: f32, family: &model::FontFamily) -> egui::FontId {
     match family {
         model::FontFamily::Proportional => {
             egui::FontId::new(font_size, egui::FontFamily::Proportional)
         }
         model::FontFamily::Monospace => egui::FontId::new(font_size, egui::FontFamily::Monospace),
+        model::FontFamily::Custom(name) => {
+            egui::FontId::new(font_size, egui::FontFamily::Name(name.clone().into()))
+        }
     }
 }
 
@@ -51,7 +54,7 @@ fn layout_rich_text_line(
     painter: &egui::Painter,
     spans: &[text_format::Span],
     font_size: f32,
-    family: model::FontFamily,
+    family: &model::FontFamily,
     color: egui::Color32,
 ) -> Vec<(text_format::Script, Arc<egui::Galley>)> {
     spans
@@ -90,7 +93,7 @@ fn draw_rich_text(
     anchor: egui::Pos2,
     text: &str,
     font_size: f32,
-    family: model::FontFamily,
+    family: &model::FontFamily,
     color: egui::Color32,
     rotation: f32,
     align: model::TextAlign,
@@ -254,9 +257,10 @@ pub(super) fn style_editor(ui: &mut egui::Ui, style: &mut model::Style) -> bool 
     ui.horizontal(|ui| {
         ui.label("Font:");
         egui::ComboBox::from_id_salt("font_family")
-            .selected_text(match style.font_family {
-                model::FontFamily::Proportional => "Proportional",
-                model::FontFamily::Monospace => "Monospace",
+            .selected_text(match &style.font_family {
+                model::FontFamily::Proportional => "Proportional".to_string(),
+                model::FontFamily::Monospace => "Monospace".to_string(),
+                model::FontFamily::Custom(name) => name.clone(),
             })
             .show_ui(ui, |ui| {
                 if ui
@@ -466,7 +470,7 @@ fn draw_element(
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
-                    element.style.font_family,
+                    &element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
                     element.style.text_align,
@@ -501,7 +505,7 @@ fn draw_element(
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
-                    element.style.font_family,
+                    &element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
                     element.style.text_align,
@@ -545,7 +549,7 @@ fn draw_element(
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
-                    element.style.font_family,
+                    &element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
                     element.style.text_align,
@@ -589,7 +593,7 @@ fn draw_element(
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
-                    element.style.font_family,
+                    &element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
                     element.style.text_align,
@@ -633,7 +637,7 @@ fn draw_element(
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
-                    element.style.font_family,
+                    &element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
                     element.style.text_align,
@@ -743,7 +747,7 @@ fn draw_element(
                 pos,
                 text,
                 element.style.text_size * view.zoom,
-                element.style.font_family,
+                &element.style.font_family,
                 element.style.text_color.to_color32(),
                 0.0,
                 element.style.text_align,
@@ -768,7 +772,7 @@ pub(super) fn draw_in_progress(
     view: &View,
     in_progress: &InProgress,
     tool: Tool,
-    style: model::Style,
+    style: &model::Style,
 ) {
     let stroke = egui::Stroke::new(
         style.stroke.width * view.zoom,

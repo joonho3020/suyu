@@ -1,10 +1,18 @@
 use crate::model;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct StylePalette {
     pub name: String,
     pub style: model::Style,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub(super) struct ColorTheme {
+    pub name: String,
+    #[serde(default)]
+    pub colors: HashMap<String, String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -20,6 +28,12 @@ pub(super) struct AppSettings {
     #[serde(default)]
     pub palettes: Vec<StylePalette>,
     pub active_palette: Option<usize>,
+    #[serde(default)]
+    pub color_themes: Vec<ColorTheme>,
+    #[serde(default)]
+    pub active_color_theme: Option<usize>,
+    #[serde(default)]
+    pub font_directory: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -34,8 +48,35 @@ impl Default for AppSettings {
             apply_style_to_selection: true,
             palettes: Vec::new(),
             active_palette: None,
+            color_themes: Vec::new(),
+            active_color_theme: None,
+            font_directory: None,
         }
     }
+}
+
+impl ColorTheme {
+    pub fn get_color(&self, name: &str) -> Option<model::Rgba> {
+        let hex = self.colors.get(name)?;
+        parse_hex_color(hex)
+    }
+}
+
+pub(super) fn parse_hex_color(s: &str) -> Option<model::Rgba> {
+    let s = s.trim().trim_start_matches('#');
+    if s.len() == 6 {
+        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+        return Some(model::Rgba { r, g, b, a: 255 });
+    }
+    if s.len() == 3 {
+        let r = u8::from_str_radix(&s[0..1], 16).ok()? * 17;
+        let g = u8::from_str_radix(&s[1..2], 16).ok()? * 17;
+        let b = u8::from_str_radix(&s[2..3], 16).ok()? * 17;
+        return Some(model::Rgba { r, g, b, a: 255 });
+    }
+    None
 }
 
 pub(super) fn load_settings(path: &str) -> Option<AppSettings> {

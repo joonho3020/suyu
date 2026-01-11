@@ -53,10 +53,12 @@ pub(super) enum CommandId {
     SetStrokeColor,
     SetFillColor,
     SetFillNone,
+    SetStrokeNone,
     SetWidth,
     SetHeight,
     FontProportional,
     FontMonospace,
+    SetFontCustom,
     TextAlignLeft,
     TextAlignCenter,
     TextAlignRight,
@@ -69,6 +71,8 @@ pub(super) enum CommandId {
     SetZoom,
     SelectAll,
     DeselectAll,
+    ShowHelp,
+    ReloadSettings,
 }
 
 pub(super) struct CommandSpec {
@@ -125,10 +129,12 @@ const COMMANDS: &[CommandSpec] = &[
     CommandSpec { id: CommandId::SetStrokeColor, name: "Format: Set Stroke Color...", search: "stroke color rgb hex" },
     CommandSpec { id: CommandId::SetFillColor, name: "Format: Set Fill Color...", search: "fill color rgb hex background" },
     CommandSpec { id: CommandId::SetFillNone, name: "Format: No Fill", search: "fill none transparent clear" },
+    CommandSpec { id: CommandId::SetStrokeNone, name: "Format: No Stroke", search: "stroke none transparent clear border outline" },
     CommandSpec { id: CommandId::SetWidth, name: "Object: Set Width...", search: "width size resize horizontal" },
     CommandSpec { id: CommandId::SetHeight, name: "Object: Set Height...", search: "height size resize vertical" },
     CommandSpec { id: CommandId::FontProportional, name: "Format: Font Proportional", search: "font proportional sans serif" },
     CommandSpec { id: CommandId::FontMonospace, name: "Format: Font Monospace", search: "font monospace code" },
+    CommandSpec { id: CommandId::SetFontCustom, name: "Format: Set Custom Font...", search: "font custom ttf otf" },
     CommandSpec { id: CommandId::TextAlignLeft, name: "Format: Text Align Left", search: "text align left" },
     CommandSpec { id: CommandId::TextAlignCenter, name: "Format: Text Align Center", search: "text align center" },
     CommandSpec { id: CommandId::TextAlignRight, name: "Format: Text Align Right", search: "text align right" },
@@ -139,6 +145,8 @@ const COMMANDS: &[CommandSpec] = &[
     CommandSpec { id: CommandId::ZoomOut, name: "View: Zoom Out", search: "zoom out smaller" },
     CommandSpec { id: CommandId::ZoomReset, name: "View: Reset Zoom", search: "zoom reset 100" },
     CommandSpec { id: CommandId::SetZoom, name: "View: Set Zoom...", search: "zoom set percent" },
+    CommandSpec { id: CommandId::ShowHelp, name: "Help: Show Help", search: "help manual commands shortcuts documentation" },
+    CommandSpec { id: CommandId::ReloadSettings, name: "Settings: Reload", search: "reload settings refresh fonts colors theme" },
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -152,6 +160,7 @@ pub(super) enum InputMode {
     Width,
     Height,
     Zoom,
+    CustomFont,
 }
 
 #[derive(Default)]
@@ -259,7 +268,7 @@ impl CommandPalette {
         }
     }
 
-    fn parse_color(s: &str) -> Option<model::Rgba> {
+    fn parse_color_basic(s: &str) -> Option<model::Rgba> {
         let s = s.trim().trim_start_matches('#');
         if s.len() == 6 {
             let r = u8::from_str_radix(&s[0..2], 16).ok()?;
@@ -294,6 +303,13 @@ impl CommandPalette {
         }
     }
 
+    fn parse_color_with_theme(app: &DiagramApp, s: &str) -> Option<model::Rgba> {
+        if let Some(color) = app.lookup_color_by_name(s.trim()) {
+            return Some(color);
+        }
+        Self::parse_color_basic(s)
+    }
+
     fn execute_with_value(app: &mut DiagramApp, mode: &InputMode, value: &str) -> bool {
         match mode {
             InputMode::TextSize => {
@@ -313,13 +329,13 @@ impl CommandPalette {
                 }
             }
             InputMode::StrokeColor => {
-                if let Some(color) = Self::parse_color(value) {
+                if let Some(color) = Self::parse_color_with_theme(app, value) {
                     Self::apply_style_change(app, |s| s.stroke.color = color);
                     return true;
                 }
             }
             InputMode::FillColor => {
-                if let Some(color) = Self::parse_color(value) {
+                if let Some(color) = Self::parse_color_with_theme(app, value) {
                     Self::apply_style_change(app, |s| s.fill = Some(color));
                     return true;
                 }
@@ -344,6 +360,15 @@ impl CommandPalette {
                 if let Ok(z) = value.trim().trim_end_matches('%').parse::<f32>() {
                     let zoom = (z / 100.0).clamp(0.1, 8.0);
                     app.view.zoom = zoom;
+                    return true;
+                }
+            }
+            InputMode::CustomFont => {
+                let font_name = value.trim().to_string();
+                if !font_name.is_empty() {
+                    Self::apply_style_change(app, |s| {
+                        s.font_family = model::FontFamily::Custom(font_name.clone());
+                    });
                     return true;
                 }
             }
@@ -439,6 +464,9 @@ impl CommandPalette {
             CommandId::SetFillNone => {
                 Self::apply_style_change(app, |s| s.fill = None);
             }
+            CommandId::SetStrokeNone => {
+                Self::apply_style_change(app, |s| s.stroke.color.a = 0);
+            }
             CommandId::FontProportional => {
                 Self::apply_style_change(app, |s| s.font_family = model::FontFamily::Proportional);
             }
@@ -472,13 +500,20 @@ impl CommandPalette {
             CommandId::ZoomReset => {
                 app.view.zoom = 1.0;
             }
+            CommandId::ShowHelp => {
+                app.show_help = true;
+            }
+            CommandId::ReloadSettings => {
+                app.reload_settings(ctx);
+            }
             CommandId::SetTextSize
             | CommandId::SetStrokeWidth
             | CommandId::SetStrokeColor
             | CommandId::SetFillColor
             | CommandId::SetWidth
             | CommandId::SetHeight
-            | CommandId::SetZoom => {}
+            | CommandId::SetZoom
+            | CommandId::SetFontCustom => {}
         }
         ctx.request_repaint();
     }
@@ -508,6 +543,7 @@ impl CommandPalette {
             CommandId::SetWidth => Some(InputMode::Width),
             CommandId::SetHeight => Some(InputMode::Height),
             CommandId::SetZoom => Some(InputMode::Zoom),
+            CommandId::SetFontCustom => Some(InputMode::CustomFont),
             _ => None,
         }
     }
@@ -521,6 +557,7 @@ impl CommandPalette {
             InputMode::Width => "Enter width:",
             InputMode::Height => "Enter height:",
             InputMode::Zoom => "Enter zoom % (e.g. 100):",
+            InputMode::CustomFont => "Enter font name (from loaded fonts):",
             InputMode::None => "",
         }
     }

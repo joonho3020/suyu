@@ -78,11 +78,12 @@ pub enum TextAlign {
     Right,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub enum FontFamily {
     #[default]
     Proportional,
     Monospace,
+    Custom(String),
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -108,7 +109,7 @@ impl Default for StrokeStyle {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Style {
     pub stroke: StrokeStyle,
     pub fill: Option<Rgba>,

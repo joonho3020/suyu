@@ -51,9 +51,17 @@ Add the following features:
     - [x] Keyboard prefix + fzf search to choose editing actions
     - [x] Persistent settings
     - [x] Save to svg
-    - [ ] Colorschemes/pallete registration
+    - [x] Colorschemes/pallete registration
+    - [x] Help: show various keybindings
     - [ ] Multi-scene support?
     - [ ] Better app-icon
+    - [ ] Place layers at the very bottom of the bar that sits on the right hand side of the pane
+    - [ ] When we enable a colorscheme, change the colors in the "Properties" to that instead of the default red, green, blue...
+    - [ ] Set name of the diagram & save json/svg according to that. Default name should be diagrams-year-month-day-time
+        - Should be able to load json by providing the path to it
+        - Similarly, users should be able to choose where to save things
+        - Can we completely elimintate json serialization & just save/load svg files directly?
+    - [ ] Load configuration from ~/.config/diagram.toml or something
 - Menubar improvements
     - [x] Scroll as I press the arrow keys
     - [x] Various object editing features
