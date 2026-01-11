@@ -7,7 +7,11 @@ use super::doc_ops::{
     element_label,
 };
 use super::geometry::{compute_binding_for_target, resolve_binding_point, topmost_bind_target_id};
-use super::render::{draw_background, draw_elements, draw_in_progress, style_editor, tool_button};
+use super::render::{
+    draw_background, draw_elements, draw_group_selection_boxes, draw_in_progress, style_editor,
+    tool_button,
+};
+use super::command_palette::CommandContext;
 use super::{DiagramApp, InProgress, Tool};
 
 impl eframe::App for DiagramApp {
@@ -20,7 +24,7 @@ impl eframe::App for DiagramApp {
             let mut cut_requested = false;
             let mut paste_requested = false;
 
-            if !wants_keyboard && !self.inline_text_editing {
+            if !wants_keyboard && !self.inline_text_editing && !self.command_palette.open {
                 for event in &i.events {
                     match event {
                         egui::Event::Copy => copy_requested = true,
@@ -41,13 +45,22 @@ impl eframe::App for DiagramApp {
                 self.paste();
             }
 
+            if !self.command_palette.open
+                && !self.inline_text_editing
+                && i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P)
+            {
+                self.command_palette.open("");
+            }
+            if i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::S) {
+                self.save_svg_to_path();
+            }
             if i.consume_key(egui::Modifiers::COMMAND, egui::Key::S) {
                 self.save_to_path();
             }
             if i.consume_key(egui::Modifiers::COMMAND, egui::Key::O) {
                 self.load_from_path();
             }
-            let skip_shortcuts = wants_keyboard || self.inline_text_editing;
+            let skip_shortcuts = wants_keyboard || self.inline_text_editing || self.command_palette.open;
 
             if !skip_shortcuts {
                 if i.consume_key(
@@ -58,6 +71,12 @@ impl eframe::App for DiagramApp {
                     self.redo();
                 } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z) {
                     self.undo();
+                }
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    self.tool = Tool::Select;
+                    self.in_progress = None;
+                    self.active_transform = None;
+                    self.tool_before_pan = None;
                 }
                 // Note: Copy/Cut/Paste are handled via egui::Event::Copy/Cut/Paste above
                 if i.consume_key(egui::Modifiers::COMMAND, egui::Key::D) {
@@ -104,13 +123,20 @@ impl eframe::App for DiagramApp {
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::T) {
                     self.tool = Tool::Text;
                 }
-                let move_amount = if i.modifiers.shift { 10.0 } else { 1.0 };
+                let move_amount = if i.modifiers.shift {
+                    self.move_step_fast
+                } else {
+                    self.move_step
+                };
+                let pan_amount = move_amount * self.view.zoom;
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)
                     || i.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowLeft)
                 {
                     if !self.selected.is_empty() {
                         self.push_undo();
                         self.translate_selected(egui::vec2(-move_amount, 0.0));
+                    } else {
+                        self.view.pan_screen += egui::vec2(pan_amount, 0.0);
                     }
                 }
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)
@@ -119,6 +145,8 @@ impl eframe::App for DiagramApp {
                     if !self.selected.is_empty() {
                         self.push_undo();
                         self.translate_selected(egui::vec2(move_amount, 0.0));
+                    } else {
+                        self.view.pan_screen += egui::vec2(-pan_amount, 0.0);
                     }
                 }
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
@@ -127,6 +155,8 @@ impl eframe::App for DiagramApp {
                     if !self.selected.is_empty() {
                         self.push_undo();
                         self.translate_selected(egui::vec2(0.0, -move_amount));
+                    } else {
+                        self.view.pan_screen += egui::vec2(0.0, pan_amount);
                     }
                 }
                 if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
@@ -135,6 +165,8 @@ impl eframe::App for DiagramApp {
                     if !self.selected.is_empty() {
                         self.push_undo();
                         self.translate_selected(egui::vec2(0.0, move_amount));
+                    } else {
+                        self.view.pan_screen += egui::vec2(0.0, -pan_amount);
                     }
                 }
             }
@@ -157,12 +189,22 @@ impl eframe::App for DiagramApp {
                 tool_button(ui, "Pan (Space)", Tool::Pan, &mut self.tool);
                 ui.separator();
                 ui.label("File");
-                ui.text_edit_singleline(&mut self.file_path);
+                if ui.text_edit_singleline(&mut self.file_path).changed() {
+                    self.persist_settings();
+                }
                 if ui.button("Load (Ctrl/Cmd+O)").clicked() {
                     self.load_from_path();
                 }
                 if ui.button("Save (Ctrl/Cmd+S)").clicked() {
                     self.save_to_path();
+                }
+                ui.separator();
+                ui.label("SVG");
+                if ui.text_edit_singleline(&mut self.svg_path).changed() {
+                    self.persist_settings();
+                }
+                if ui.button("Export (Cmd+Shift+S)").clicked() {
+                    self.save_svg_to_path();
                 }
                 ui.separator();
                 if ui.button("Front").clicked() {
@@ -183,7 +225,12 @@ impl eframe::App for DiagramApp {
             .show(ctx, |ui| {
                 ui.heading("Properties");
                 ui.separator();
-                ui.checkbox(&mut self.apply_style_to_selection, "Apply to selection");
+                if ui
+                    .checkbox(&mut self.apply_style_to_selection, "Apply to selection")
+                    .changed()
+                {
+                    self.persist_settings();
+                }
 
                 if self.selected.len() == 1 {
                     let selected_id = *self.selected.iter().next().unwrap();
@@ -207,9 +254,9 @@ impl eframe::App for DiagramApp {
                             }
                             model::ElementKind::Rect { rect, label }
                             | model::ElementKind::Ellipse { rect, label }
-                            | model::ElementKind::Triangle { rect, label }
-                            | model::ElementKind::Parallelogram { rect, label }
-                            | model::ElementKind::Trapezoid { rect, label } => {
+                            | model::ElementKind::Triangle { rect, label, .. }
+                            | model::ElementKind::Parallelogram { rect, label, .. }
+                            | model::ElementKind::Trapezoid { rect, label, .. } => {
                                 ui.separator();
                                 ui.label("Label");
                                 let response =
@@ -247,7 +294,195 @@ impl eframe::App for DiagramApp {
                                     rect.max.y = rect.min.y + height;
                                 }
                             }
+                            model::ElementKind::Line {
+                                a,
+                                b,
+                                arrow,
+                                arrow_style,
+                                start_binding,
+                                end_binding,
+                            } => {
+                                ui.separator();
+                                ui.label("Line");
+                                let mut next_style = *arrow_style;
+                                egui::ComboBox::from_id_salt("arrow_style")
+                                    .selected_text(match next_style {
+                                        model::ArrowStyle::None => "None",
+                                        model::ArrowStyle::End => "Arrow (End)",
+                                        model::ArrowStyle::Start => "Arrow (Start)",
+                                        model::ArrowStyle::Both => "Arrow (Both)",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut next_style,
+                                            model::ArrowStyle::None,
+                                            "None",
+                                        );
+                                        ui.selectable_value(
+                                            &mut next_style,
+                                            model::ArrowStyle::End,
+                                            "Arrow (End)",
+                                        );
+                                        ui.selectable_value(
+                                            &mut next_style,
+                                            model::ArrowStyle::Start,
+                                            "Arrow (Start)",
+                                        );
+                                        ui.selectable_value(
+                                            &mut next_style,
+                                            model::ArrowStyle::Both,
+                                            "Arrow (Both)",
+                                        );
+                                    });
+                                if next_style != *arrow_style {
+                                    *arrow_style = next_style;
+                                    *arrow = matches!(
+                                        *arrow_style,
+                                        model::ArrowStyle::End | model::ArrowStyle::Both
+                                    );
+                                    self.status = None;
+                                }
+
+                                ui.separator();
+                                ui.label("Endpoints");
+                                let mut ax = a.x;
+                                let mut ay = a.y;
+                                let mut bx = b.x;
+                                let mut by = b.y;
+                                let original = (ax, ay, bx, by);
+                                ui.horizontal(|ui| {
+                                    ui.label("A:");
+                                    let rx = ui.add(egui::DragValue::new(&mut ax).speed(1.0));
+                                    let ry = ui.add(egui::DragValue::new(&mut ay).speed(1.0));
+                                    push_undo_on_focus |= rx.gained_focus() || ry.gained_focus();
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("B:");
+                                    let rx = ui.add(egui::DragValue::new(&mut bx).speed(1.0));
+                                    let ry = ui.add(egui::DragValue::new(&mut by).speed(1.0));
+                                    push_undo_on_focus |= rx.gained_focus() || ry.gained_focus();
+                                });
+                                if (ax, ay, bx, by) != original {
+                                    *a = model::Point { x: ax, y: ay };
+                                    *b = model::Point { x: bx, y: by };
+                                    *start_binding = None;
+                                    *end_binding = None;
+                                    self.status = None;
+                                }
+                            }
+                            model::ElementKind::Polyline { arrow_style, .. } => {
+                                ui.separator();
+                                ui.label("Polyline");
+                                let mut next_style = *arrow_style;
+                                egui::ComboBox::from_id_salt("polyline_arrow_style")
+                                    .selected_text(match next_style {
+                                        model::ArrowStyle::None => "None",
+                                        model::ArrowStyle::End => "Arrow (End)",
+                                        model::ArrowStyle::Start => "Arrow (Start)",
+                                        model::ArrowStyle::Both => "Arrow (Both)",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut next_style,
+                                            model::ArrowStyle::None,
+                                            "None",
+                                        );
+                                        ui.selectable_value(
+                                            &mut next_style,
+                                            model::ArrowStyle::End,
+                                            "Arrow (End)",
+                                        );
+                                        ui.selectable_value(
+                                            &mut next_style,
+                                            model::ArrowStyle::Start,
+                                            "Arrow (Start)",
+                                        );
+                                        ui.selectable_value(
+                                            &mut next_style,
+                                            model::ArrowStyle::Both,
+                                            "Arrow (Both)",
+                                        );
+                                    });
+                                if next_style != *arrow_style {
+                                    *arrow_style = next_style;
+                                    self.status = None;
+                                }
+                            }
                             _ => {}
+                        }
+                        #[derive(Clone, Copy)]
+                        enum ShapeParamKind {
+                            Triangle,
+                            Parallelogram,
+                            Trapezoid,
+                        }
+                        let shape = match &self.doc.elements[idx].kind {
+                            model::ElementKind::Triangle { apex_ratio, .. } => {
+                                Some((ShapeParamKind::Triangle, *apex_ratio))
+                            }
+                            model::ElementKind::Parallelogram { skew_ratio, .. } => {
+                                Some((ShapeParamKind::Parallelogram, *skew_ratio))
+                            }
+                            model::ElementKind::Trapezoid { top_inset_ratio, .. } => {
+                                Some((ShapeParamKind::Trapezoid, *top_inset_ratio))
+                            }
+                            _ => None,
+                        };
+                        if let Some((kind, current)) = shape {
+                            let mut next = None;
+                            match kind {
+                                ShapeParamKind::Triangle => {
+                                    ui.separator();
+                                    ui.label("Triangle");
+                                    let mut v = current;
+                                    let resp = ui.add(
+                                        egui::Slider::new(&mut v, -0.95..=0.95)
+                                            .text("Apex")
+                                            .clamp_to_range(true),
+                                    );
+                                    push_undo_on_focus |= resp.gained_focus();
+                                    if resp.changed() {
+                                        next = Some(v);
+                                    }
+                                }
+                                ShapeParamKind::Parallelogram => {
+                                    ui.separator();
+                                    ui.label("Parallelogram");
+                                    let mut v = current;
+                                    let resp = ui.add(
+                                        egui::Slider::new(&mut v, -0.95..=0.95)
+                                            .text("Skew")
+                                            .clamp_to_range(true),
+                                    );
+                                    push_undo_on_focus |= resp.gained_focus();
+                                    if resp.changed() {
+                                        next = Some(v);
+                                    }
+                                }
+                                ShapeParamKind::Trapezoid => {
+                                    ui.separator();
+                                    ui.label("Trapezoid");
+                                    let mut v = current;
+                                    let resp = ui.add(
+                                        egui::Slider::new(&mut v, 0.0..=0.95)
+                                            .text("Top inset")
+                                            .clamp_to_range(true),
+                                    );
+                                    push_undo_on_focus |= resp.gained_focus();
+                                    if resp.changed() {
+                                        next = Some(v);
+                                    }
+                                }
+                            }
+                            if let Some(v) = next {
+                                self.push_undo();
+                                match (&mut self.doc.elements[idx].kind, kind) {
+                                    (model::ElementKind::Triangle { apex_ratio, .. }, ShapeParamKind::Triangle) => *apex_ratio = v,
+                                    (model::ElementKind::Parallelogram { skew_ratio, .. }, ShapeParamKind::Parallelogram) => *skew_ratio = v,
+                                    (model::ElementKind::Trapezoid { top_inset_ratio, .. }, ShapeParamKind::Trapezoid) => *top_inset_ratio = v,
+                                    _ => {}
+                                }
+                            }
                         }
                         if style_changed {
                             self.push_undo();
@@ -279,13 +514,93 @@ impl eframe::App for DiagramApp {
                 }
 
                 ui.separator();
+                ui.heading("Palettes");
+                let mut palette_selection = self.active_palette;
+                egui::ComboBox::from_id_salt("palette_select")
+                    .selected_text(match palette_selection {
+                        Some(idx) => self
+                            .palettes
+                            .get(idx)
+                            .map(|p| p.name.as_str())
+                            .unwrap_or("None"),
+                        None => "None",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut palette_selection, None, "None");
+                        for (idx, p) in self.palettes.iter().enumerate() {
+                            ui.selectable_value(&mut palette_selection, Some(idx), &p.name);
+                        }
+                    });
+                if palette_selection != self.active_palette {
+                    self.active_palette = palette_selection;
+                    if let Some(idx) = self.active_palette {
+                        let style_to_apply = self.palettes.get(idx).map(|p| p.style);
+                        if let Some(style) = style_to_apply {
+                            self.push_undo();
+                            self.style = style;
+                            if self.apply_style_to_selection && !self.selected.is_empty() {
+                                for element in &mut self.doc.elements {
+                                    if self.selected.contains(&element.id) {
+                                        element.style = self.style;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.persist_settings();
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.new_palette_name);
+                    if ui.button("Add").clicked() {
+                        let name = self.new_palette_name.trim().to_string();
+                        if !name.is_empty() {
+                            self.palettes.push(super::settings::StylePalette {
+                                name,
+                                style: self.style,
+                            });
+                            self.active_palette = Some(self.palettes.len() - 1);
+                            self.new_palette_name.clear();
+                            self.persist_settings();
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let has_active = self
+                        .active_palette
+                        .is_some_and(|idx| idx < self.palettes.len());
+                    if ui.add_enabled(has_active, egui::Button::new("Update")).clicked() {
+                        if let Some(idx) = self.active_palette {
+                            self.palettes[idx].style = self.style;
+                            self.persist_settings();
+                        }
+                    }
+                    if ui.add_enabled(has_active, egui::Button::new("Delete")).clicked() {
+                        if let Some(idx) = self.active_palette {
+                            if idx < self.palettes.len() {
+                                self.palettes.remove(idx);
+                                self.active_palette = None;
+                                self.persist_settings();
+                            }
+                        }
+                    }
+                });
+
+                ui.separator();
                 ui.heading("Grid & Snap");
-                ui.checkbox(&mut self.snap_to_grid, "Snap to grid");
-                ui.add(
+                if ui.checkbox(&mut self.snap_to_grid, "Snap to grid").changed() {
+                    self.persist_settings();
+                }
+                if ui
+                    .add(
                     egui::Slider::new(&mut self.grid_size, 8.0..=128.0)
                         .text("Grid size")
                         .logarithmic(true),
-                );
+                )
+                .changed()
+                {
+                    self.persist_settings();
+                }
                 if self.selected.len() == 1 {
                     let selected_id = *self.selected.iter().next().unwrap();
                     if let Some(idx) = self.element_index_by_id(selected_id) {
@@ -340,8 +655,27 @@ impl eframe::App for DiagramApp {
                 });
 
                 ui.separator();
+                ui.heading("Editor");
+                if ui
+                    .add(egui::Slider::new(&mut self.move_step, 0.25..=32.0).text("Move"))
+                    .changed()
+                {
+                    self.persist_settings();
+                }
+                if ui
+                    .add(
+                        egui::Slider::new(&mut self.move_step_fast, 0.25..=256.0).text("Move (⇧)"),
+                    )
+                    .changed()
+                {
+                    self.persist_settings();
+                }
+
+                ui.separator();
                 ui.label("Shortcuts");
-                ui.label("V/R/O/L/A/P/T tools, Del delete, Ctrl/Cmd+S save, Ctrl/Cmd+O load");
+                ui.label(
+                    "Space tap command palette, Cmd+Shift+P command palette, V/R/O/L/A/P/T tools, Del delete, Esc select, Ctrl/Cmd+S save, Ctrl/Cmd+Shift+S export SVG, Ctrl/Cmd+O load",
+                );
             });
 
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
@@ -372,10 +706,15 @@ impl eframe::App for DiagramApp {
                 if self.tool_before_pan.is_none() {
                     self.tool_before_pan = Some(self.tool);
                     self.tool = Tool::Pan;
+                    self.space_pan_happened = false;
                 }
             } else if let Some(prev) = self.tool_before_pan.take() {
                 if self.tool == Tool::Pan {
                     self.tool = prev;
+                }
+                if !self.space_pan_happened && !self.command_palette.open && !self.inline_text_editing
+                {
+                    self.command_palette.open("");
                 }
             }
 
@@ -392,6 +731,7 @@ impl eframe::App for DiagramApp {
 
             if self.tool == Tool::Pan && response.dragged() {
                 self.view.pan_screen += response.drag_delta();
+                self.space_pan_happened = true;
             }
 
             let pointer_pos = ctx.input(|i| i.pointer.interact_pos());
@@ -552,10 +892,50 @@ impl eframe::App for DiagramApp {
             if response.dragged() {
                 if let Some(world_pos) = pointer_world {
                     if let Some(in_progress) = &mut self.in_progress {
+                        let shift = ctx.input(|i| i.modifiers.shift);
                         match in_progress {
-                            InProgress::DragShape { current, .. } => *current = world_pos,
-                            InProgress::DragLine { current, .. } => *current = world_pos,
-                            InProgress::Polyline { current, .. } => *current = world_pos,
+                            InProgress::DragShape { start, current } => {
+                                let mut p = world_pos;
+                                if shift && matches!(self.tool, Tool::Rectangle | Tool::Ellipse) {
+                                    let d = p - *start;
+                                    if d.x.abs() >= d.y.abs() {
+                                        let s = d.x.abs();
+                                        let ny = if d.y >= 0.0 { s } else { -s };
+                                        p = *start + egui::vec2(d.x, ny);
+                                    } else {
+                                        let s = d.y.abs();
+                                        let nx = if d.x >= 0.0 { s } else { -s };
+                                        p = *start + egui::vec2(nx, d.y);
+                                    }
+                                }
+                                *current = p;
+                            }
+                            InProgress::DragLine { start, current, .. } => {
+                                let mut p = world_pos;
+                                if shift {
+                                    let d = p - *start;
+                                    if d.x.abs() >= d.y.abs() {
+                                        p.y = start.y;
+                                    } else {
+                                        p.x = start.x;
+                                    }
+                                }
+                                *current = p;
+                            }
+                            InProgress::Polyline { points, current, .. } => {
+                                let mut p = world_pos;
+                                if shift {
+                                    if let Some(last) = points.last().copied() {
+                                        let d = p - last;
+                                        if d.x.abs() >= d.y.abs() {
+                                            p.y = last.y;
+                                        } else {
+                                            p.x = last.x;
+                                        }
+                                    }
+                                }
+                                *current = p;
+                            }
                             InProgress::Pen { points } => {
                                 if points.last().copied() != Some(world_pos) {
                                     points.push(world_pos);
@@ -600,14 +980,17 @@ impl eframe::App for DiagramApp {
                                     Tool::Triangle => model::ElementKind::Triangle {
                                         rect,
                                         label: String::new(),
+                                        apex_ratio: 0.0,
                                     },
                                     Tool::Parallelogram => model::ElementKind::Parallelogram {
                                         rect,
                                         label: String::new(),
+                                        skew_ratio: 0.25,
                                     },
                                     Tool::Trapezoid => model::ElementKind::Trapezoid {
                                         rect,
                                         label: String::new(),
+                                        top_inset_ratio: 0.25,
                                     },
                                     _ => model::ElementKind::Rect {
                                         rect,
@@ -735,12 +1118,12 @@ impl eframe::App for DiagramApp {
                             }
                             let mut groups = HashSet::new();
                             for id in &selected {
-                                if let Some(g) = self.group_of(*id) {
+                                if let Some(g) = self.root_group_of_element(*id) {
                                     groups.insert(g);
                                 }
                             }
                             for g in groups {
-                                for id in self.group_members(g) {
+                                for id in self.group_members_recursive(g) {
                                     selected.insert(id);
                                 }
                             }
@@ -753,6 +1136,7 @@ impl eframe::App for DiagramApp {
             let painter = ui.painter_at(rect);
             draw_background(&painter, rect, &self.view);
             draw_elements(&painter, origin, &self.view, &self.doc, &self.selected);
+            draw_group_selection_boxes(&painter, origin, &self.view, &self.doc, &self.selected);
             if let Some(in_progress) = &self.in_progress {
                 draw_in_progress(
                     &painter,
@@ -921,6 +1305,21 @@ impl eframe::App for DiagramApp {
                     },
                 );
                 ui.separator();
+                ui.add_enabled_ui(self.selected.len() == 2, |ui| {
+                    if ui.button("Connect (line)").clicked() {
+                        self.auto_connect_selected(model::ArrowStyle::None);
+                        ui.close();
+                    }
+                    if ui.button("Connect (arrow)").clicked() {
+                        self.auto_connect_selected(model::ArrowStyle::End);
+                        ui.close();
+                    }
+                    if ui.button("Connect (bidirectional)").clicked() {
+                        self.auto_connect_selected(model::ArrowStyle::Both);
+                        ui.close();
+                    }
+                });
+                ui.separator();
                 ui.add_enabled_ui(self.selected.len() >= 2, |ui| {
                     if ui.button("Align left").clicked() {
                         self.push_undo();
@@ -1002,5 +1401,17 @@ impl eframe::App for DiagramApp {
                 }
             }
         });
+
+        let cx = CommandContext {
+            selected_len: self.selected.len(),
+            has_undo: !self.history.is_empty(),
+            has_redo: !self.future.is_empty(),
+            can_ungroup: self.selected.iter().any(|id| self.group_of(*id).is_some()),
+            snap_to_grid: self.snap_to_grid,
+        };
+        let cmd = { self.command_palette.ui(ctx, cx) };
+        if let Some(cmd) = cmd {
+            super::command_palette::CommandPalette::execute(self, ctx, cmd);
+        }
     }
 }

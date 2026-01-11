@@ -8,3 +8,4 @@ eframe = { version = "0.33", default-features = false, features = ["default_font
 fuzzy-matcher = "0.3.7"
 serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "1.0.139"
+toml = "0.8.20"

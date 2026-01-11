@@ -1,5 +1,6 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
+use crate::text_format;
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Point {
@@ -69,6 +70,21 @@ pub enum LineStyle {
     Dotted,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub enum FontFamily {
+    #[default]
+    Proportional,
+    Monospace,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StrokeStyle {
     pub color: Rgba,
@@ -98,6 +114,10 @@ pub struct Style {
     pub fill: Option<Rgba>,
     pub text_color: Rgba,
     pub text_size: f32,
+    #[serde(default)]
+    pub text_align: TextAlign,
+    #[serde(default)]
+    pub font_family: FontFamily,
 }
 
 impl Style {
@@ -117,6 +137,8 @@ impl Style {
                 a: 255,
             },
             text_size: 16.0,
+            text_align: TextAlign::Center,
+            font_family: FontFamily::Proportional,
         }
     }
 }
@@ -124,12 +146,24 @@ impl Style {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Document {
     pub elements: Vec<Element>,
+    #[serde(default)]
+    pub groups: Vec<Group>,
 }
 
 impl Default for Document {
     fn default() -> Self {
-        Self { elements: vec![] }
+        Self {
+            elements: vec![],
+            groups: vec![],
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Group {
+    pub id: u64,
+    #[serde(default)]
+    pub parent_id: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -180,16 +214,22 @@ pub enum ElementKind {
         rect: RectF,
         #[serde(default)]
         label: String,
+        #[serde(default)]
+        apex_ratio: f32,
     },
     Parallelogram {
         rect: RectF,
         #[serde(default)]
         label: String,
+        #[serde(default = "default_parallelogram_skew_ratio")]
+        skew_ratio: f32,
     },
     Trapezoid {
         rect: RectF,
         #[serde(default)]
         label: String,
+        #[serde(default = "default_trapezoid_inset_ratio")]
+        top_inset_ratio: f32,
     },
     Line {
         a: Point,
@@ -215,6 +255,14 @@ pub enum ElementKind {
         pos: Point,
         text: String,
     },
+}
+
+fn default_parallelogram_skew_ratio() -> f32 {
+    0.25
+}
+
+fn default_trapezoid_inset_ratio() -> f32 {
+    0.25
 }
 
 impl Element {
@@ -250,9 +298,16 @@ impl Element {
             }
             ElementKind::Text { pos, text } => {
                 let pos = pos.to_pos2();
-                let w = (text.chars().count() as f32).max(1.0) * self.style.text_size * 0.6;
+                let w = (text_format::visual_char_count(text) as f32).max(1.0)
+                    * self.style.text_size
+                    * 0.6;
                 let h = self.style.text_size * 1.2;
-                egui::Rect::from_min_size(pos, egui::vec2(w, h))
+                let x = match self.style.text_align {
+                    TextAlign::Left => pos.x,
+                    TextAlign::Center => pos.x - w * 0.5,
+                    TextAlign::Right => pos.x - w,
+                };
+                egui::Rect::from_min_size(egui::pos2(x, pos.y), egui::vec2(w, h))
             }
         }
     }

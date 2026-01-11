@@ -4,10 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 mod actions;
+mod command_palette;
 mod doc_ops;
 mod geometry;
 mod interaction;
 mod render;
+mod settings;
+mod svg;
 mod update;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +73,13 @@ enum LineEndpoint {
     End,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShapeAdjustKind {
+    TriangleApex,
+    ParallelogramSkew,
+    TrapezoidTopInset,
+}
+
 #[derive(Clone, Debug)]
 enum ActiveTransform {
     Resize {
@@ -90,6 +100,10 @@ enum ActiveTransform {
         start_a: egui::Pos2,
         start_b: egui::Pos2,
         start_pointer_world: egui::Pos2,
+    },
+    ShapeAdjust {
+        element_id: u64,
+        kind: ShapeAdjustKind,
     },
 }
 
@@ -142,6 +156,8 @@ struct Snapshot {
 #[derive(Clone, Serialize, Deserialize)]
 struct ClipboardPayload {
     elements: Vec<model::Element>,
+    #[serde(default)]
+    groups: Vec<model::Group>,
 }
 
 pub struct DiagramApp {
@@ -163,16 +179,35 @@ pub struct DiagramApp {
     drag_transform_recorded: bool,
     active_transform: Option<ActiveTransform>,
     file_path: String,
+    svg_path: String,
+    settings_path: String,
     status: Option<String>,
     editing_text_id: Option<u64>,
     inline_text_editing: bool,
     apply_style_to_selection: bool,
     snap_to_grid: bool,
     grid_size: f32,
+    move_step: f32,
+    move_step_fast: f32,
+    palettes: Vec<settings::StylePalette>,
+    active_palette: Option<usize>,
+    new_palette_name: String,
+    space_pan_happened: bool,
+    command_palette: command_palette::CommandPalette,
 }
 
 impl DiagramApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let settings_path = "settings.toml".to_string();
+        let settings = settings::load_settings(&settings_path)
+            .or_else(|| settings::load_settings("settings.json"))
+            .unwrap_or_default();
+        let mut style = model::Style::default_for_shapes();
+        if let Some(idx) = settings.active_palette {
+            if let Some(p) = settings.palettes.get(idx) {
+                style = p.style;
+            }
+        }
         Self {
             doc: model::Document::default(),
             selected: HashSet::new(),
@@ -181,7 +216,7 @@ impl DiagramApp {
             view: View::default(),
             next_id: 1,
             next_group_id: 1,
-            style: model::Style::default_for_shapes(),
+            style,
             in_progress: None,
             context_world_pos: None,
             context_hit: None,
@@ -191,13 +226,22 @@ impl DiagramApp {
             clipboard: None,
             drag_transform_recorded: false,
             active_transform: None,
-            file_path: "diagram.json".to_string(),
+            file_path: settings.file_path,
+            svg_path: settings.svg_path,
+            settings_path,
             status: None,
             editing_text_id: None,
             inline_text_editing: false,
-            apply_style_to_selection: true,
-            snap_to_grid: true,
-            grid_size: 64.0,
+            apply_style_to_selection: settings.apply_style_to_selection,
+            snap_to_grid: settings.snap_to_grid,
+            grid_size: settings.grid_size,
+            move_step: settings.move_step,
+            move_step_fast: settings.move_step_fast,
+            palettes: settings.palettes,
+            active_palette: settings.active_palette,
+            new_palette_name: String::new(),
+            space_pan_happened: false,
+            command_palette: command_palette::CommandPalette::default(),
         }
     }
 }

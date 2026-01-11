@@ -2,7 +2,7 @@ use crate::model;
 use eframe::egui;
 
 use super::geometry::{resolved_line_endpoints_world, rotate_vec2};
-use super::{ActiveTransform, DiagramApp, LineEndpoint, ResizeHandle, View};
+use super::{ActiveTransform, DiagramApp, LineEndpoint, ResizeHandle, ShapeAdjustKind, View};
 
 impl DiagramApp {
     pub(super) fn interact_selection_handles(
@@ -183,6 +183,26 @@ impl DiagramApp {
                             LineEndpoint::Start => a += delta,
                             LineEndpoint::End => b += delta,
                         }
+                        if shift {
+                            let (moved, fixed) = match endpoint {
+                                LineEndpoint::Start => (a, b),
+                                LineEndpoint::End => (b, a),
+                            };
+                            let d = moved - fixed;
+                            if d.x.abs() >= d.y.abs() {
+                                if matches!(endpoint, LineEndpoint::Start) {
+                                    a.y = b.y;
+                                } else {
+                                    b.y = a.y;
+                                }
+                            } else {
+                                if matches!(endpoint, LineEndpoint::Start) {
+                                    a.x = b.x;
+                                } else {
+                                    b.x = a.x;
+                                }
+                            }
+                        }
                         if let Some(element) = self.doc.elements.get_mut(idx) {
                             if let model::ElementKind::Line {
                                 a: pa,
@@ -204,6 +224,45 @@ impl DiagramApp {
                         }
                     }
                 }
+                ActiveTransform::ShapeAdjust { element_id, kind } => {
+                    if *element_id != selected_id {
+                        stop_transform = true;
+                    } else if let Some(p) = pointer_world {
+                        if let Some(element) = self.doc.elements.get_mut(idx) {
+                            match (&mut element.kind, *kind) {
+                                (model::ElementKind::Triangle { rect, apex_ratio, .. }, ShapeAdjustKind::TriangleApex) => {
+                                    let r = rect.to_rect();
+                                    let center = r.center();
+                                    let local = rotate_vec2(p - center, -element.rotation);
+                                    let hw = r.width() * 0.5;
+                                    if hw > f32::EPSILON {
+                                        *apex_ratio = (local.x / hw).clamp(-0.95, 0.95);
+                                    }
+                                }
+                                (model::ElementKind::Parallelogram { rect, skew_ratio, .. }, ShapeAdjustKind::ParallelogramSkew) => {
+                                    let r = rect.to_rect();
+                                    let center = r.center();
+                                    let local = rotate_vec2(p - center, -element.rotation);
+                                    let hw = r.width() * 0.5;
+                                    if hw > f32::EPSILON {
+                                        *skew_ratio = (local.x / hw).clamp(-0.95, 0.95);
+                                    }
+                                }
+                                (model::ElementKind::Trapezoid { rect, top_inset_ratio, .. }, ShapeAdjustKind::TrapezoidTopInset) => {
+                                    let r = rect.to_rect();
+                                    let center = r.center();
+                                    let local = rotate_vec2(p - center, -element.rotation);
+                                    let hw = r.width() * 0.5;
+                                    if hw > f32::EPSILON {
+                                        let inset = (local.x + hw).clamp(0.0, hw * 0.95);
+                                        *top_inset_ratio = (inset / hw).clamp(0.0, 0.95);
+                                    }
+                                }
+                                _ => stop_transform = true,
+                            }
+                        }
+                    }
+                }
             }
         }
         if stop_transform {
@@ -217,12 +276,9 @@ impl DiagramApp {
         let handle_fill = egui::Color32::from_rgb(250, 250, 250);
         let handle_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 160, 255));
 
-        match kind {
-            model::ElementKind::Rect { rect, .. }
-            | model::ElementKind::Ellipse { rect, .. }
-            | model::ElementKind::Triangle { rect, .. }
-            | model::ElementKind::Parallelogram { rect, .. }
-            | model::ElementKind::Trapezoid { rect, .. } => {
+        let mut draw_rect_handles = |rect: model::RectF,
+                                     rotation: f32,
+                                     adjust: Option<(ShapeAdjustKind, egui::Vec2)>| {
                 let rect = rect.to_rect();
                 let center = rect.center();
                 let size = rect.size();
@@ -318,6 +374,55 @@ impl DiagramApp {
                 if rresp.hovered() || rresp.dragged() {
                     ctx.set_cursor_icon(egui::CursorIcon::Grab);
                 }
+                if let Some((kind, local)) = adjust {
+                    let world = center + rotate_vec2(local, rotation);
+                    let screen = view.world_to_screen(origin, world);
+                    let r = egui::Rect::from_center_size(
+                        screen,
+                        egui::vec2(handle_size_screen, handle_size_screen),
+                    );
+                    let id = ui.id().with(("shape_adjust", selected_id, kind as u8));
+                    let resp = ui.interact(r, id, egui::Sense::drag());
+                    painter.rect_filled(r, 1.0, handle_fill);
+                    painter.rect_stroke(r, 1.0, handle_stroke, egui::StrokeKind::Middle);
+                    if resp.drag_started() {
+                        self.push_undo();
+                        self.active_transform = Some(ActiveTransform::ShapeAdjust {
+                            element_id: selected_id,
+                            kind,
+                        });
+                    }
+                    if resp.drag_stopped() {
+                        self.active_transform = None;
+                    }
+                    if resp.hovered() || resp.dragged() {
+                        ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    }
+                }
+        };
+
+        match kind {
+            model::ElementKind::Rect { rect, .. } => {
+                draw_rect_handles(rect, rotation, None);
+            }
+            model::ElementKind::Ellipse { rect, .. } => {
+                draw_rect_handles(rect, rotation, None);
+            }
+            model::ElementKind::Triangle { rect, apex_ratio, .. } => {
+                let local = egui::vec2(apex_ratio.clamp(-0.95, 0.95) * rect.to_rect().width() * 0.5, -rect.to_rect().height() * 0.5);
+                draw_rect_handles(rect, rotation, Some((ShapeAdjustKind::TriangleApex, local)));
+            }
+            model::ElementKind::Parallelogram { rect, skew_ratio, .. } => {
+                let local = egui::vec2(skew_ratio.clamp(-0.95, 0.95) * rect.to_rect().width() * 0.5, -rect.to_rect().height() * 0.5);
+                draw_rect_handles(rect, rotation, Some((ShapeAdjustKind::ParallelogramSkew, local)));
+            }
+            model::ElementKind::Trapezoid { rect, top_inset_ratio, .. } => {
+                let r = rect.to_rect();
+                let hw = r.width() * 0.5;
+                let hh = r.height() * 0.5;
+                let inset = top_inset_ratio.clamp(0.0, 0.95) * hw;
+                let local = egui::vec2(-hw + inset, -hh);
+                draw_rect_handles(rect, rotation, Some((ShapeAdjustKind::TrapezoidTopInset, local)));
             }
             model::ElementKind::Line {
                 a,

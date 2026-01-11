@@ -15,6 +15,64 @@ pub(super) fn rotated_rect_points_screen(
     rect: egui::Rect,
     rotation: f32,
 ) -> Vec<egui::Pos2> {
+    rotated_rect_points_world(rect, rotation)
+        .into_iter()
+        .map(|w| view.world_to_screen(origin, w))
+        .collect()
+}
+
+pub(super) fn rotated_ellipse_points_screen(
+    origin: egui::Pos2,
+    view: &View,
+    rect: egui::Rect,
+    rotation: f32,
+) -> Vec<egui::Pos2> {
+    rotated_ellipse_points_world(rect, rotation)
+        .into_iter()
+        .map(|w| view.world_to_screen(origin, w))
+        .collect()
+}
+
+pub(super) fn rotated_triangle_points_screen(
+    origin: egui::Pos2,
+    view: &View,
+    rect: egui::Rect,
+    rotation: f32,
+    apex_ratio: f32,
+) -> Vec<egui::Pos2> {
+    rotated_triangle_points_world(rect, rotation, apex_ratio)
+        .into_iter()
+        .map(|w| view.world_to_screen(origin, w))
+        .collect()
+}
+
+pub(super) fn rotated_parallelogram_points_screen(
+    origin: egui::Pos2,
+    view: &View,
+    rect: egui::Rect,
+    rotation: f32,
+    skew_ratio: f32,
+) -> Vec<egui::Pos2> {
+    rotated_parallelogram_points_world(rect, rotation, skew_ratio)
+        .into_iter()
+        .map(|w| view.world_to_screen(origin, w))
+        .collect()
+}
+
+pub(super) fn rotated_trapezoid_points_screen(
+    origin: egui::Pos2,
+    view: &View,
+    rect: egui::Rect,
+    rotation: f32,
+    top_inset_ratio: f32,
+) -> Vec<egui::Pos2> {
+    rotated_trapezoid_points_world(rect, rotation, top_inset_ratio)
+        .into_iter()
+        .map(|w| view.world_to_screen(origin, w))
+        .collect()
+}
+
+pub(super) fn rotated_rect_points_world(rect: egui::Rect, rotation: f32) -> Vec<egui::Pos2> {
     let center = rect.center();
     let corners = [
         rect.left_top(),
@@ -26,18 +84,12 @@ pub(super) fn rotated_rect_points_screen(
         .into_iter()
         .map(|p| {
             let v = p - center;
-            let w = center + rotate_vec2(v, rotation);
-            view.world_to_screen(origin, w)
+            center + rotate_vec2(v, rotation)
         })
         .collect()
 }
 
-pub(super) fn rotated_ellipse_points_screen(
-    origin: egui::Pos2,
-    view: &View,
-    rect: egui::Rect,
-    rotation: f32,
-) -> Vec<egui::Pos2> {
+pub(super) fn rotated_ellipse_points_world(rect: egui::Rect, rotation: f32) -> Vec<egui::Pos2> {
     let center = rect.center();
     let rx = rect.width() * 0.5;
     let ry = rect.height() * 0.5;
@@ -49,45 +101,40 @@ pub(super) fn rotated_ellipse_points_screen(
         .map(|i| {
             let t = (i as f32) / (steps as f32) * std::f32::consts::TAU;
             let local = egui::vec2(t.cos() * rx, t.sin() * ry);
-            let w = center + rotate_vec2(local, rotation);
-            view.world_to_screen(origin, w)
+            center + rotate_vec2(local, rotation)
         })
         .collect()
 }
 
-pub(super) fn rotated_triangle_points_screen(
-    origin: egui::Pos2,
-    view: &View,
+pub(super) fn rotated_triangle_points_world(
     rect: egui::Rect,
     rotation: f32,
+    apex_ratio: f32,
 ) -> Vec<egui::Pos2> {
     let center = rect.center();
     let half_w = rect.width() * 0.5;
     let half_h = rect.height() * 0.5;
+    let apex = (apex_ratio.clamp(-1.0, 1.0)) * half_w;
     let corners = [
-        egui::vec2(0.0, -half_h),
+        egui::vec2(apex, -half_h),
         egui::vec2(half_w, half_h),
         egui::vec2(-half_w, half_h),
     ];
     corners
         .into_iter()
-        .map(|v| {
-            let w = center + rotate_vec2(v, rotation);
-            view.world_to_screen(origin, w)
-        })
+        .map(|v| center + rotate_vec2(v, rotation))
         .collect()
 }
 
-pub(super) fn rotated_parallelogram_points_screen(
-    origin: egui::Pos2,
-    view: &View,
+pub(super) fn rotated_parallelogram_points_world(
     rect: egui::Rect,
     rotation: f32,
+    skew_ratio: f32,
 ) -> Vec<egui::Pos2> {
     let center = rect.center();
     let half_w = rect.width() * 0.5;
     let half_h = rect.height() * 0.5;
-    let skew = half_w * 0.25;
+    let skew = (skew_ratio.clamp(-0.95, 0.95)) * half_w;
     let corners = [
         egui::vec2(-half_w + skew, -half_h),
         egui::vec2(half_w + skew, -half_h),
@@ -96,23 +143,19 @@ pub(super) fn rotated_parallelogram_points_screen(
     ];
     corners
         .into_iter()
-        .map(|v| {
-            let w = center + rotate_vec2(v, rotation);
-            view.world_to_screen(origin, w)
-        })
+        .map(|v| center + rotate_vec2(v, rotation))
         .collect()
 }
 
-pub(super) fn rotated_trapezoid_points_screen(
-    origin: egui::Pos2,
-    view: &View,
+pub(super) fn rotated_trapezoid_points_world(
     rect: egui::Rect,
     rotation: f32,
+    top_inset_ratio: f32,
 ) -> Vec<egui::Pos2> {
     let center = rect.center();
     let half_w = rect.width() * 0.5;
     let half_h = rect.height() * 0.5;
-    let top_inset = half_w * 0.25;
+    let top_inset = (top_inset_ratio.clamp(0.0, 0.95)) * half_w;
     let corners = [
         egui::vec2(-half_w + top_inset, -half_h),
         egui::vec2(half_w - top_inset, -half_h),
@@ -121,10 +164,7 @@ pub(super) fn rotated_trapezoid_points_screen(
     ];
     corners
         .into_iter()
-        .map(|v| {
-            let w = center + rotate_vec2(v, rotation);
-            view.world_to_screen(origin, w)
-        })
+        .map(|v| center + rotate_vec2(v, rotation))
         .collect()
 }
 

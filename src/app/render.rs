@@ -1,6 +1,7 @@
-use crate::model;
+use crate::{model, text_format};
 use eframe::egui;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::geometry::{
     resolved_line_endpoints_world, rotated_ellipse_points_screen,
@@ -14,6 +15,133 @@ pub(super) fn tool_button(ui: &mut egui::Ui, label: &str, tool: Tool, selected: 
     if ui.selectable_label(active, label).clicked() {
         *selected = tool;
     }
+}
+
+fn font_id(font_size: f32, family: model::FontFamily) -> egui::FontId {
+    match family {
+        model::FontFamily::Proportional => {
+            egui::FontId::new(font_size, egui::FontFamily::Proportional)
+        }
+        model::FontFamily::Monospace => egui::FontId::new(font_size, egui::FontFamily::Monospace),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VAlign {
+    Center,
+    Top,
+}
+
+fn script_scale(script: text_format::Script) -> f32 {
+    match script {
+        text_format::Script::Normal => 1.0,
+        text_format::Script::Sub | text_format::Script::Sup => 0.7,
+    }
+}
+
+fn script_y_offset(font_size: f32, script: text_format::Script) -> f32 {
+    match script {
+        text_format::Script::Normal => 0.0,
+        text_format::Script::Sup => -font_size * 0.35,
+        text_format::Script::Sub => font_size * 0.2,
+    }
+}
+
+fn layout_rich_text_line(
+    painter: &egui::Painter,
+    spans: &[text_format::Span],
+    font_size: f32,
+    family: model::FontFamily,
+    color: egui::Color32,
+) -> Vec<(text_format::Script, Arc<egui::Galley>)> {
+    spans
+        .iter()
+        .map(|s| {
+            let size = font_size * script_scale(s.script);
+            let galley = painter.layout_no_wrap(s.text.clone(), font_id(size, family), color);
+            (s.script, galley)
+        })
+        .collect()
+}
+
+fn measure_rich_text(galleys: &[(text_format::Script, Arc<egui::Galley>)]) -> egui::Vec2 {
+    let mut w = 0.0;
+    let mut h: f32 = 0.0;
+    for (_, g) in galleys {
+        let s = g.size();
+        w += s.x;
+        h = h.max(s.y);
+    }
+    egui::vec2(w, h)
+}
+
+fn rotate_pos_about(center: egui::Pos2, p: egui::Pos2, rotation: f32) -> egui::Pos2 {
+    if rotation.abs() <= f32::EPSILON {
+        return p;
+    }
+    let sin = rotation.sin();
+    let cos = rotation.cos();
+    let v = p - center;
+    center + egui::vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
+}
+
+fn draw_rich_text(
+    painter: &egui::Painter,
+    anchor: egui::Pos2,
+    text: &str,
+    font_size: f32,
+    family: model::FontFamily,
+    color: egui::Color32,
+    rotation: f32,
+    align: model::TextAlign,
+    valign: VAlign,
+) -> egui::Vec2 {
+    let lines = text_format::parse_rich_text_lines(text);
+    let line_height = font_size * 1.2;
+
+    let mut line_layouts: Vec<(f32, Vec<(text_format::Script, Arc<egui::Galley>)>)> = Vec::new();
+    let mut max_width: f32 = 0.0;
+    for line_spans in &lines {
+        let galleys = layout_rich_text_line(painter, line_spans, font_size, family, color);
+        let line_width = measure_rich_text(&galleys).x;
+        max_width = max_width.max(line_width);
+        line_layouts.push((line_width, galleys));
+    }
+    let total_height = lines.len().max(1) as f32 * line_height;
+
+    let y0 = match valign {
+        VAlign::Center => anchor.y - total_height * 0.5,
+        VAlign::Top => anchor.y,
+    };
+
+    let mut y = y0;
+    for (line_width, galleys) in line_layouts {
+        let x0 = match align {
+            model::TextAlign::Left => anchor.x,
+            model::TextAlign::Center => anchor.x - line_width * 0.5,
+            model::TextAlign::Right => anchor.x - line_width,
+        };
+        let mut x = x0;
+        for (script, galley) in galleys {
+            let s = galley.size();
+            let y_pos = y + script_y_offset(font_size, script);
+            let mut pos = egui::pos2(x, y_pos);
+            if rotation.abs() > f32::EPSILON {
+                pos = rotate_pos_about(anchor, pos, rotation);
+            }
+            let mut shape = egui::Shape::galley(pos, galley, color);
+            if rotation.abs() > f32::EPSILON {
+                if let egui::Shape::Text(ref mut data) = shape {
+                    data.angle = rotation;
+                }
+            }
+            painter.add(shape);
+            x += s.x;
+        }
+        y += line_height;
+    }
+
+    egui::vec2(max_width, total_height)
 }
 
 fn color_row(ui: &mut egui::Ui, rgba: &mut model::Rgba) -> bool {
@@ -123,6 +251,65 @@ pub(super) fn style_editor(ui: &mut egui::Ui, style: &mut model::Style) -> bool 
     changed |= ui
         .add(egui::Slider::new(&mut style.text_size, 8.0..=48.0).text("Size"))
         .changed();
+    ui.horizontal(|ui| {
+        ui.label("Font:");
+        egui::ComboBox::from_id_salt("font_family")
+            .selected_text(match style.font_family {
+                model::FontFamily::Proportional => "Proportional",
+                model::FontFamily::Monospace => "Monospace",
+            })
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_value(
+                        &mut style.font_family,
+                        model::FontFamily::Proportional,
+                        "Proportional",
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .selectable_value(
+                        &mut style.font_family,
+                        model::FontFamily::Monospace,
+                        "Monospace",
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+    });
+    ui.horizontal(|ui| {
+        ui.label("Align:");
+        egui::ComboBox::from_id_salt("text_align")
+            .selected_text(match style.text_align {
+                model::TextAlign::Left => "Left",
+                model::TextAlign::Center => "Center",
+                model::TextAlign::Right => "Right",
+            })
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_value(&mut style.text_align, model::TextAlign::Left, "Left")
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .selectable_value(&mut style.text_align, model::TextAlign::Center, "Center")
+                    .changed()
+                {
+                    changed = true;
+                }
+                if ui
+                    .selectable_value(&mut style.text_align, model::TextAlign::Right, "Right")
+                    .changed()
+                {
+                    changed = true;
+                }
+            });
+    });
     changed
 }
 
@@ -174,6 +361,74 @@ pub(super) fn draw_elements(
     }
 }
 
+pub(super) fn draw_group_selection_boxes(
+    painter: &egui::Painter,
+    origin: egui::Pos2,
+    view: &View,
+    doc: &model::Document,
+    selected: &HashSet<u64>,
+) {
+    if doc.groups.is_empty() || selected.is_empty() {
+        return;
+    }
+    let mut parent: HashMap<u64, Option<u64>> = HashMap::new();
+    for g in &doc.groups {
+        parent.insert(g.id, g.parent_id);
+    }
+
+    let mut roots = HashSet::new();
+    for id in selected {
+        let Some(group_id) = doc
+            .elements
+            .iter()
+            .find(|e| e.id == *id)
+            .and_then(|e| e.group_id)
+        else {
+            continue;
+        };
+        let mut cur = group_id;
+        for _ in 0..256 {
+            let Some(pid) = parent.get(&cur).copied().flatten() else {
+                break;
+            };
+            cur = pid;
+        }
+        roots.insert(cur);
+    }
+
+    for root in roots {
+        let mut group_ids = HashSet::new();
+        let mut stack = vec![root];
+        while let Some(g) = stack.pop() {
+            if !group_ids.insert(g) {
+                continue;
+            }
+            for child in parent
+                .iter()
+                .filter_map(|(id, pid)| (*pid == Some(g)).then_some(*id))
+            {
+                stack.push(child);
+            }
+        }
+
+        let mut bounds: Option<egui::Rect> = None;
+        for e in &doc.elements {
+            if e.group_id.is_some_and(|g| group_ids.contains(&g)) {
+                let b = e.bounds();
+                bounds = Some(bounds.map(|r| r.union(b)).unwrap_or(b));
+            }
+        }
+        let Some(bounds) = bounds else {
+            continue;
+        };
+        let screen_min = view.world_to_screen(origin, bounds.min);
+        let screen_max = view.world_to_screen(origin, bounds.max);
+        let r = egui::Rect::from_min_max(screen_min, screen_max).expand(6.0);
+        let stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 160, 255));
+        painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
+    }
+}
+
 fn draw_element(
     painter: &egui::Painter,
     origin: egui::Pos2,
@@ -196,15 +451,26 @@ fn draw_element(
                 stroke,
             ));
             if !label.is_empty() {
-                let center_world = rect.to_rect().center();
-                let center_screen = view.world_to_screen(origin, center_world);
-                draw_rotated_text(
+                let r = rect.to_rect();
+                let c = r.center();
+                let padding = 8.0_f32.min(r.width() * 0.25);
+                let anchor_unrot = match element.style.text_align {
+                    model::TextAlign::Left => egui::pos2(r.left() + padding, c.y),
+                    model::TextAlign::Center => c,
+                    model::TextAlign::Right => egui::pos2(r.right() - padding, c.y),
+                };
+                let anchor_world = rotate_pos_about(c, anchor_unrot, element.rotation);
+                let center_screen = view.world_to_screen(origin, anchor_world);
+                draw_rich_text(
                     painter,
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
+                    element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
+                    element.style.text_align,
+                    VAlign::Center,
                 );
             }
             if is_selected {
@@ -220,87 +486,158 @@ fn draw_element(
                 stroke,
             ));
             if !label.is_empty() {
-                let center_world = rect.to_rect().center();
-                let center_screen = view.world_to_screen(origin, center_world);
-                draw_rotated_text(
+                let r = rect.to_rect();
+                let c = r.center();
+                let padding = 8.0_f32.min(r.width() * 0.25);
+                let anchor_unrot = match element.style.text_align {
+                    model::TextAlign::Left => egui::pos2(r.left() + padding, c.y),
+                    model::TextAlign::Center => c,
+                    model::TextAlign::Right => egui::pos2(r.right() - padding, c.y),
+                };
+                let anchor_world = rotate_pos_about(c, anchor_unrot, element.rotation);
+                let center_screen = view.world_to_screen(origin, anchor_world);
+                draw_rich_text(
                     painter,
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
+                    element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
+                    element.style.text_align,
+                    VAlign::Center,
                 );
             }
             if is_selected {
                 draw_polygon_selection(painter, &points);
             }
         }
-        model::ElementKind::Triangle { rect, label } => {
-            let points =
-                rotated_triangle_points_screen(origin, view, rect.to_rect(), element.rotation);
+        model::ElementKind::Triangle {
+            rect,
+            label,
+            apex_ratio,
+        } => {
+            let points = rotated_triangle_points_screen(
+                origin,
+                view,
+                rect.to_rect(),
+                element.rotation,
+                *apex_ratio,
+            );
             painter.add(egui::Shape::convex_polygon(
                 points.clone(),
                 fill.unwrap_or(egui::Color32::TRANSPARENT),
                 stroke,
             ));
             if !label.is_empty() {
-                let center_world = rect.to_rect().center();
-                let center_screen = view.world_to_screen(origin, center_world);
-                draw_rotated_text(
+                let r = rect.to_rect();
+                let c = r.center();
+                let padding = 8.0_f32.min(r.width() * 0.25);
+                let anchor_unrot = match element.style.text_align {
+                    model::TextAlign::Left => egui::pos2(r.left() + padding, c.y),
+                    model::TextAlign::Center => c,
+                    model::TextAlign::Right => egui::pos2(r.right() - padding, c.y),
+                };
+                let anchor_world = rotate_pos_about(c, anchor_unrot, element.rotation);
+                let center_screen = view.world_to_screen(origin, anchor_world);
+                draw_rich_text(
                     painter,
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
+                    element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
+                    element.style.text_align,
+                    VAlign::Center,
                 );
             }
             if is_selected {
                 draw_polygon_selection(painter, &points);
             }
         }
-        model::ElementKind::Parallelogram { rect, label } => {
-            let points =
-                rotated_parallelogram_points_screen(origin, view, rect.to_rect(), element.rotation);
+        model::ElementKind::Parallelogram {
+            rect,
+            label,
+            skew_ratio,
+        } => {
+            let points = rotated_parallelogram_points_screen(
+                origin,
+                view,
+                rect.to_rect(),
+                element.rotation,
+                *skew_ratio,
+            );
             painter.add(egui::Shape::convex_polygon(
                 points.clone(),
                 fill.unwrap_or(egui::Color32::TRANSPARENT),
                 stroke,
             ));
             if !label.is_empty() {
-                let center_world = rect.to_rect().center();
-                let center_screen = view.world_to_screen(origin, center_world);
-                draw_rotated_text(
+                let r = rect.to_rect();
+                let c = r.center();
+                let padding = 8.0_f32.min(r.width() * 0.25);
+                let anchor_unrot = match element.style.text_align {
+                    model::TextAlign::Left => egui::pos2(r.left() + padding, c.y),
+                    model::TextAlign::Center => c,
+                    model::TextAlign::Right => egui::pos2(r.right() - padding, c.y),
+                };
+                let anchor_world = rotate_pos_about(c, anchor_unrot, element.rotation);
+                let center_screen = view.world_to_screen(origin, anchor_world);
+                draw_rich_text(
                     painter,
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
+                    element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
+                    element.style.text_align,
+                    VAlign::Center,
                 );
             }
             if is_selected {
                 draw_polygon_selection(painter, &points);
             }
         }
-        model::ElementKind::Trapezoid { rect, label } => {
-            let points =
-                rotated_trapezoid_points_screen(origin, view, rect.to_rect(), element.rotation);
+        model::ElementKind::Trapezoid {
+            rect,
+            label,
+            top_inset_ratio,
+        } => {
+            let points = rotated_trapezoid_points_screen(
+                origin,
+                view,
+                rect.to_rect(),
+                element.rotation,
+                *top_inset_ratio,
+            );
             painter.add(egui::Shape::convex_polygon(
                 points.clone(),
                 fill.unwrap_or(egui::Color32::TRANSPARENT),
                 stroke,
             ));
             if !label.is_empty() {
-                let center_world = rect.to_rect().center();
-                let center_screen = view.world_to_screen(origin, center_world);
-                draw_rotated_text(
+                let r = rect.to_rect();
+                let c = r.center();
+                let padding = 8.0_f32.min(r.width() * 0.25);
+                let anchor_unrot = match element.style.text_align {
+                    model::TextAlign::Left => egui::pos2(r.left() + padding, c.y),
+                    model::TextAlign::Center => c,
+                    model::TextAlign::Right => egui::pos2(r.right() - padding, c.y),
+                };
+                let anchor_world = rotate_pos_about(c, anchor_unrot, element.rotation);
+                let center_screen = view.world_to_screen(origin, anchor_world);
+                draw_rich_text(
                     painter,
                     center_screen,
                     label,
                     element.style.text_size * view.zoom,
+                    element.style.font_family,
                     element.style.text_color.to_color32(),
                     element.rotation,
+                    element.style.text_align,
+                    VAlign::Center,
                 );
             }
             if is_selected {
@@ -401,21 +738,24 @@ fn draw_element(
         }
         model::ElementKind::Text { pos, text } => {
             let pos = view.world_to_screen(origin, pos.to_pos2());
-            let font_id = egui::FontId::proportional(element.style.text_size * view.zoom);
-            painter.text(
+            let size = draw_rich_text(
+                painter,
                 pos,
-                egui::Align2::LEFT_TOP,
                 text,
-                font_id,
+                element.style.text_size * view.zoom,
+                element.style.font_family,
                 element.style.text_color.to_color32(),
+                0.0,
+                element.style.text_align,
+                VAlign::Top,
             );
             if is_selected {
-                let w = (text.chars().count() as f32).max(1.0)
-                    * element.style.text_size
-                    * 0.6
-                    * view.zoom;
-                let h = element.style.text_size * 1.2 * view.zoom;
-                let r = egui::Rect::from_min_size(pos, egui::vec2(w, h));
+                let x = match element.style.text_align {
+                    model::TextAlign::Left => pos.x,
+                    model::TextAlign::Center => pos.x - size.x * 0.5,
+                    model::TextAlign::Right => pos.x - size.x,
+                };
+                let r = egui::Rect::from_min_size(egui::pos2(x, pos.y), size);
                 draw_selection_bounds(painter, r);
             }
         }
@@ -457,15 +797,16 @@ pub(super) fn draw_in_progress(
                     ));
                 }
                 Tool::Triangle => {
-                    let pts = rotated_triangle_points_screen(origin, view, world_rect, 0.0);
+                    let pts = rotated_triangle_points_screen(origin, view, world_rect, 0.0, 0.0);
                     painter.add(egui::Shape::closed_line(pts, stroke));
                 }
                 Tool::Parallelogram => {
-                    let pts = rotated_parallelogram_points_screen(origin, view, world_rect, 0.0);
+                    let pts =
+                        rotated_parallelogram_points_screen(origin, view, world_rect, 0.0, 0.25);
                     painter.add(egui::Shape::closed_line(pts, stroke));
                 }
                 Tool::Trapezoid => {
-                    let pts = rotated_trapezoid_points_screen(origin, view, world_rect, 0.0);
+                    let pts = rotated_trapezoid_points_screen(origin, view, world_rect, 0.0, 0.25);
                     painter.add(egui::Shape::closed_line(pts, stroke));
                 }
                 _ => {
@@ -560,53 +901,6 @@ fn draw_selection_bounds(painter: &egui::Painter, rect: egui::Rect) {
 fn draw_polygon_selection(painter: &egui::Painter, points: &[egui::Pos2]) {
     let stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 160, 255));
     painter.add(egui::Shape::closed_line(points.to_vec(), stroke));
-}
-
-fn draw_rotated_text(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    text: &str,
-    font_size: f32,
-    color: egui::Color32,
-    rotation: f32,
-) {
-    let font_id = egui::FontId::proportional(font_size);
-    let galley = painter.layout_no_wrap(text.to_string(), font_id, color);
-    let galley_size = galley.size();
-
-    if rotation.abs() <= f32::EPSILON {
-        let text_offset = egui::vec2(-galley_size.x * 0.5, -galley_size.y * 0.5);
-        let text_pos = center + text_offset;
-        painter.galley(text_pos, galley, color);
-    } else {
-        let text_offset = egui::vec2(-galley_size.x * 0.5, -galley_size.y * 0.5);
-        let text_pos = center + text_offset;
-        let mut mesh = egui::Mesh::default();
-        mesh.add_rect_with_uv(
-            egui::Rect::from_min_size(text_pos, galley_size),
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            color,
-        );
-        let sin = rotation.sin();
-        let cos = rotation.cos();
-        for vertex in &mut mesh.vertices {
-            let v = vertex.pos - center;
-            let rotated = egui::pos2(v.x * cos - v.y * sin, v.x * sin + v.y * cos);
-            vertex.pos = center + rotated.to_vec2();
-        }
-        let mut text_shape = egui::Shape::galley(text_pos, galley, color);
-        if let egui::Shape::Text(ref mut text_shape_data) = text_shape {
-            let galley_pos = text_shape_data.pos;
-            let offset = galley_pos - center;
-            let rotated_offset = egui::vec2(
-                offset.x * cos - offset.y * sin,
-                offset.x * sin + offset.y * cos,
-            );
-            text_shape_data.pos = center + rotated_offset;
-            text_shape_data.angle = rotation;
-        }
-        painter.add(text_shape);
-    }
 }
 
 fn draw_styled_line(

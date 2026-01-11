@@ -6,6 +6,7 @@ use super::geometry::{
     compute_binding_for_target, hit_test_element, resolve_binding_point,
     resolved_line_endpoints_world, snap_element_to_grid, topmost_bind_target_id, translate_element,
 };
+use super::{settings, svg};
 use super::{ClipboardPayload, DiagramApp, LineEndpoint, Snapshot};
 
 impl DiagramApp {
@@ -128,12 +129,105 @@ impl DiagramApp {
             .and_then(|e| e.group_id)
     }
 
-    pub(super) fn group_members(&self, group_id: u64) -> Vec<u64> {
+    pub(super) fn group_parent(&self, group_id: u64) -> Option<u64> {
+        self.doc
+            .groups
+            .iter()
+            .find(|g| g.id == group_id)
+            .and_then(|g| g.parent_id)
+    }
+
+    pub(super) fn ensure_group_exists(&mut self, group_id: u64) {
+        if self.doc.groups.iter().any(|g| g.id == group_id) {
+            return;
+        }
+        self.doc.groups.push(model::Group {
+            id: group_id,
+            parent_id: None,
+        });
+    }
+
+    pub(super) fn set_group_parent(&mut self, group_id: u64, parent_id: Option<u64>) {
+        self.ensure_group_exists(group_id);
+        if let Some(g) = self.doc.groups.iter_mut().find(|g| g.id == group_id) {
+            g.parent_id = parent_id;
+        }
+    }
+
+    pub(super) fn group_root(&self, mut group_id: u64) -> u64 {
+        for _ in 0..256 {
+            let Some(parent) = self.group_parent(group_id) else {
+                return group_id;
+            };
+            group_id = parent;
+        }
+        group_id
+    }
+
+    pub(super) fn root_group_of_element(&self, element_id: u64) -> Option<u64> {
+        self.group_of(element_id).map(|g| self.group_root(g))
+    }
+
+    pub(super) fn group_descendants_inclusive(&self, group_id: u64) -> Vec<u64> {
+        let mut out = Vec::new();
+        let mut stack = vec![group_id];
+        while let Some(g) = stack.pop() {
+            out.push(g);
+            for child in self
+                .doc
+                .groups
+                .iter()
+                .filter(|gr| gr.parent_id == Some(g))
+                .map(|gr| gr.id)
+            {
+                stack.push(child);
+            }
+        }
+        out
+    }
+
+    pub(super) fn group_members_recursive(&self, group_id: u64) -> Vec<u64> {
+        let groups: HashSet<u64> = self.group_descendants_inclusive(group_id).into_iter().collect();
         self.doc
             .elements
             .iter()
-            .filter_map(|e| (e.group_id == Some(group_id)).then_some(e.id))
+            .filter_map(|e| e.group_id.is_some_and(|g| groups.contains(&g)).then_some(e.id))
             .collect()
+    }
+
+    pub(super) fn normalize_groups(&mut self) {
+        let mut used: HashSet<u64> = self
+            .doc
+            .elements
+            .iter()
+            .filter_map(|e| e.group_id)
+            .collect();
+        for g in &self.doc.groups {
+            used.insert(g.id);
+            if let Some(pid) = g.parent_id {
+                used.insert(pid);
+            }
+        }
+        let mut stack: Vec<u64> = used.iter().copied().collect();
+        while let Some(gid) = stack.pop() {
+            if let Some(parent) = self.group_parent(gid) {
+                if used.insert(parent) {
+                    stack.push(parent);
+                }
+            }
+        }
+        for gid in used.clone() {
+            self.ensure_group_exists(gid);
+        }
+        self.doc.groups.retain(|g| used.contains(&g.id));
+        let ids: HashSet<u64> = self.doc.groups.iter().map(|g| g.id).collect();
+        for g in &mut self.doc.groups {
+            if let Some(pid) = g.parent_id {
+                if !ids.contains(&pid) {
+                    g.parent_id = None;
+                }
+            }
+        }
     }
 
     pub(super) fn topmost_hit(&self, world_pos: egui::Pos2, threshold_world: f32) -> Option<u64> {
@@ -152,8 +246,8 @@ impl DiagramApp {
 
     pub(super) fn set_selection_single(&mut self, id: u64) {
         self.selected.clear();
-        if let Some(group_id) = self.group_of(id) {
-            for id in self.group_members(group_id) {
+        if let Some(group_id) = self.root_group_of_element(id) {
+            for id in self.group_members_recursive(group_id) {
                 self.selected.insert(id);
             }
         } else {
@@ -163,8 +257,8 @@ impl DiagramApp {
     }
 
     pub(super) fn toggle_selection(&mut self, id: u64) {
-        if let Some(group_id) = self.group_of(id) {
-            let members = self.group_members(group_id);
+        if let Some(group_id) = self.root_group_of_element(id) {
+            let members = self.group_members_recursive(group_id);
             let all_selected = members.iter().all(|id| self.selected.contains(id));
             if all_selected {
                 for id in members {
@@ -225,6 +319,7 @@ impl DiagramApp {
             }
         }
         self.clear_selection();
+        self.normalize_groups();
     }
 
     pub(super) fn bring_selected_to_front(&mut self) {
@@ -344,6 +439,84 @@ impl DiagramApp {
         }
     }
 
+    fn element_center_world(&self, element_id: u64) -> Option<egui::Pos2> {
+        let element = self.doc.elements.iter().find(|e| e.id == element_id)?;
+        match &element.kind {
+            model::ElementKind::Rect { rect, .. }
+            | model::ElementKind::Ellipse { rect, .. }
+            | model::ElementKind::Triangle { rect, .. }
+            | model::ElementKind::Parallelogram { rect, .. }
+            | model::ElementKind::Trapezoid { rect, .. } => Some(rect.to_rect().center()),
+            model::ElementKind::Text { pos, .. } => Some(pos.to_pos2()),
+            _ => Some(element.bounds().center()),
+        }
+    }
+
+    pub(super) fn auto_connect_selected(&mut self, arrow_style: model::ArrowStyle) {
+        if self.selected.len() != 2 {
+            self.status = Some("Select exactly 2 objects to connect".to_string());
+            return;
+        }
+        let mut it = self.selected.iter().copied();
+        let a = it.next().unwrap();
+        let b = it.next().unwrap();
+        self.auto_connect_between(a, b, arrow_style);
+    }
+
+    pub(super) fn auto_connect_between(
+        &mut self,
+        a_id: u64,
+        b_id: u64,
+        arrow_style: model::ArrowStyle,
+    ) {
+        let Some(ca) = self.element_center_world(a_id) else {
+            return;
+        };
+        let Some(cb) = self.element_center_world(b_id) else {
+            return;
+        };
+        let mut dir = cb - ca;
+        if dir.length() <= f32::EPSILON {
+            dir = egui::vec2(1.0, 0.0);
+        } else {
+            dir /= dir.length();
+        }
+        let probe_a = ca + dir * 1_000_000.0;
+        let probe_b = cb - dir * 1_000_000.0;
+
+        let Some(start_binding) = compute_binding_for_target(&self.doc, a_id, probe_a) else {
+            self.status = Some("Cannot bind start endpoint to selected object".to_string());
+            return;
+        };
+        let Some(end_binding) = compute_binding_for_target(&self.doc, b_id, probe_b) else {
+            self.status = Some("Cannot bind end endpoint to selected object".to_string());
+            return;
+        };
+        let a_world = resolve_binding_point(&self.doc, &start_binding).unwrap_or(ca);
+        let b_world = resolve_binding_point(&self.doc, &end_binding).unwrap_or(cb);
+
+        self.push_undo();
+        let id = self.allocate_id();
+        let mut style = self.style;
+        style.fill = None;
+        self.doc.elements.push(model::Element {
+            id,
+            group_id: None,
+            rotation: 0.0,
+            snap_enabled: true,
+            kind: model::ElementKind::Line {
+                a: model::Point::from_pos2(a_world),
+                b: model::Point::from_pos2(b_world),
+                arrow: false,
+                arrow_style,
+                start_binding: Some(start_binding),
+                end_binding: Some(end_binding),
+            },
+            style,
+        });
+        self.set_selection_single(id);
+    }
+
     pub(super) fn send_selected_to_back(&mut self) {
         if self.selected.is_empty() {
             return;
@@ -393,11 +566,31 @@ impl DiagramApp {
         if self.selected.len() < 2 {
             return;
         }
+        let mut selected_roots: HashSet<u64> = HashSet::new();
+        let mut selected_ungrouped: HashSet<u64> = HashSet::new();
+        for id in &self.selected {
+            if let Some(root) = self.root_group_of_element(*id) {
+                selected_roots.insert(root);
+            } else {
+                selected_ungrouped.insert(*id);
+            }
+        }
+        let item_count = selected_roots.len() + selected_ungrouped.len();
+        if item_count < 2 {
+            return;
+        }
         self.push_undo();
         let group_id = self.next_group_id;
         self.next_group_id += 1;
+        self.doc.groups.push(model::Group {
+            id: group_id,
+            parent_id: None,
+        });
+        for root in selected_roots {
+            self.set_group_parent(root, Some(group_id));
+        }
         for element in &mut self.doc.elements {
-            if self.selected.contains(&element.id) {
+            if selected_ungrouped.contains(&element.id) {
                 element.group_id = Some(group_id);
             }
         }
@@ -409,7 +602,7 @@ impl DiagramApp {
         }
         let mut groups = HashSet::new();
         for id in &self.selected {
-            if let Some(g) = self.group_of(*id) {
+            if let Some(g) = self.root_group_of_element(*id) {
                 groups.insert(g);
             }
         }
@@ -417,13 +610,21 @@ impl DiagramApp {
             return;
         }
         self.push_undo();
-        for element in &mut self.doc.elements {
-            if let Some(g) = element.group_id {
-                if groups.contains(&g) {
-                    element.group_id = None;
+        for g in &groups {
+            let parent = self.group_parent(*g);
+            for element in &mut self.doc.elements {
+                if element.group_id == Some(*g) {
+                    element.group_id = parent;
+                }
+            }
+            for gr in &mut self.doc.groups {
+                if gr.parent_id == Some(*g) {
+                    gr.parent_id = parent;
                 }
             }
         }
+        self.doc.groups.retain(|gr| !groups.contains(&gr.id));
+        self.normalize_groups();
     }
 
     pub(super) fn duplicate_selected(&mut self) {
@@ -463,7 +664,23 @@ impl DiagramApp {
             .filter(|e| self.selected.contains(&e.id))
             .cloned()
             .collect();
-        let payload = ClipboardPayload { elements };
+        let mut group_ids: HashSet<u64> = elements.iter().filter_map(|e| e.group_id).collect();
+        let mut stack: Vec<u64> = group_ids.iter().copied().collect();
+        while let Some(g) = stack.pop() {
+            if let Some(parent) = self.group_parent(g) {
+                if group_ids.insert(parent) {
+                    stack.push(parent);
+                }
+            }
+        }
+        let groups: Vec<model::Group> = self
+            .doc
+            .groups
+            .iter()
+            .filter(|g| group_ids.contains(&g.id))
+            .copied()
+            .collect();
+        let payload = ClipboardPayload { elements, groups };
         self.status = Some(format!("Copied {} element(s)", payload.elements.len()));
         self.clipboard = Some(payload);
     }
@@ -479,14 +696,20 @@ impl DiagramApp {
         }
         self.push_undo();
         let mut group_map: HashMap<u64, u64> = HashMap::new();
-        for e in &payload.elements {
-            if let Some(g) = e.group_id {
-                group_map.entry(g).or_insert_with(|| {
-                    let ng = self.next_group_id;
-                    self.next_group_id += 1;
-                    ng
-                });
-            }
+        for g in &payload.groups {
+            group_map.entry(g.id).or_insert_with(|| {
+                let ng = self.next_group_id;
+                self.next_group_id += 1;
+                ng
+            });
+        }
+        for g in &payload.groups {
+            let new_id = *group_map.get(&g.id).unwrap();
+            let new_parent = g.parent_id.and_then(|pid| group_map.get(&pid).copied());
+            self.doc.groups.push(model::Group {
+                id: new_id,
+                parent_id: new_parent,
+            });
         }
 
         let mut base: Option<egui::Rect> = None;
@@ -538,6 +761,7 @@ impl DiagramApp {
         self.doc.elements.extend(new_elements);
         self.selected = new_ids.into_iter().collect();
         self.editing_text_id = None;
+        self.normalize_groups();
     }
 
     pub(super) fn paste(&mut self) {
@@ -559,20 +783,51 @@ impl DiagramApp {
         }
     }
 
+    pub(super) fn save_svg_to_path(&mut self) {
+        let svg = svg::document_to_svg(&self.doc);
+        match std::fs::write(&self.svg_path, svg) {
+            Ok(()) => self.status = Some(format!("Saved {}", self.svg_path)),
+            Err(e) => self.status = Some(format!("SVG save failed: {e}")),
+        }
+    }
+
+    pub(super) fn settings_snapshot(&self) -> settings::AppSettings {
+        settings::AppSettings {
+            file_path: self.file_path.clone(),
+            svg_path: self.svg_path.clone(),
+            snap_to_grid: self.snap_to_grid,
+            grid_size: self.grid_size,
+            move_step: self.move_step,
+            move_step_fast: self.move_step_fast,
+            apply_style_to_selection: self.apply_style_to_selection,
+            palettes: self.palettes.clone(),
+            active_palette: self.active_palette,
+        }
+    }
+
+    pub(super) fn persist_settings(&mut self) {
+        let snapshot = self.settings_snapshot();
+        if let Err(e) = settings::save_settings(&self.settings_path, &snapshot) {
+            self.status = Some(format!("Settings save failed: {e}"));
+        }
+    }
+
     pub(super) fn load_from_path(&mut self) {
         match std::fs::read_to_string(&self.file_path) {
             Ok(s) => match serde_json::from_str::<model::Document>(&s) {
                 Ok(doc) => {
                     self.doc = doc;
+                    self.normalize_groups();
                     self.next_id = self.doc.elements.iter().map(|e| e.id).max().unwrap_or(0) + 1;
-                    self.next_group_id = self
+                    let max_group_in_elements = self
                         .doc
                         .elements
                         .iter()
                         .filter_map(|e| e.group_id)
                         .max()
-                        .unwrap_or(0)
-                        + 1;
+                        .unwrap_or(0);
+                    let max_group_in_doc = self.doc.groups.iter().map(|g| g.id).max().unwrap_or(0);
+                    self.next_group_id = max_group_in_elements.max(max_group_in_doc) + 1;
                     self.clear_selection();
                     self.history.clear();
                     self.future.clear();

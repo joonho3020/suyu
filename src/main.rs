@@ -1,5 +1,6 @@
 mod app;
 mod model;
+mod text_format;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions::default();
