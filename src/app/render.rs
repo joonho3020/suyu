@@ -147,10 +147,10 @@ fn draw_rich_text(
     egui::vec2(max_width, total_height)
 }
 
-fn color_row(ui: &mut egui::Ui, rgba: &mut model::Rgba) -> bool {
+fn color_row(ui: &mut egui::Ui, rgba: &mut model::Rgba, theme_colors: &[egui::Color32]) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        let presets = [
+        let default_presets = [
             egui::Color32::from_rgb(20, 20, 20),
             egui::Color32::from_rgb(200, 40, 40),
             egui::Color32::from_rgb(40, 140, 60),
@@ -158,12 +158,17 @@ fn color_row(ui: &mut egui::Ui, rgba: &mut model::Rgba) -> bool {
             egui::Color32::from_rgb(200, 140, 40),
             egui::Color32::from_rgb(130, 60, 180),
         ];
-        for c in presets {
+        let presets: &[egui::Color32] = if theme_colors.is_empty() {
+            &default_presets
+        } else {
+            theme_colors
+        };
+        for c in presets.iter().take(8) {
             if ui
-                .add_sized([18.0, 18.0], egui::Button::new("").fill(c))
+                .add_sized([18.0, 18.0], egui::Button::new("").fill(*c))
                 .clicked()
             {
-                *rgba = model::Rgba::from_color32(c);
+                *rgba = model::Rgba::from_color32(*c);
                 changed = true;
             }
         }
@@ -181,10 +186,10 @@ fn color_row(ui: &mut egui::Ui, rgba: &mut model::Rgba) -> bool {
     changed
 }
 
-pub(super) fn style_editor(ui: &mut egui::Ui, style: &mut model::Style) -> bool {
+pub(super) fn style_editor(ui: &mut egui::Ui, style: &mut model::Style, theme_colors: &[egui::Color32]) -> bool {
     let mut changed = false;
     ui.label("Stroke");
-    changed |= color_row(ui, &mut style.stroke.color);
+    changed |= color_row(ui, &mut style.stroke.color, theme_colors);
     changed |= ui
         .add(egui::Slider::new(&mut style.stroke.width, 0.5..=12.0).text("Width"))
         .changed();
@@ -246,11 +251,11 @@ pub(super) fn style_editor(ui: &mut egui::Ui, style: &mut model::Style) -> bool 
         changed = true;
     }
     if let Some(fill) = &mut style.fill {
-        changed |= color_row(ui, fill);
+        changed |= color_row(ui, fill, theme_colors);
     }
     ui.separator();
     ui.label("Text");
-    changed |= color_row(ui, &mut style.text_color);
+    changed |= color_row(ui, &mut style.text_color, theme_colors);
     changed |= ui
         .add(egui::Slider::new(&mut style.text_size, 8.0..=48.0).text("Size"))
         .changed();

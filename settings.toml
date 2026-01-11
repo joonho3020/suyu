@@ -1,0 +1,26 @@
+file_path = "diagram.json"
+svg_path = "diagram.svg"
+snap_to_grid = false
+grid_size = 64.0
+move_step = 1.0
+move_step_fast = 10.0
+apply_style_to_selection = true
+palettes = []
+active_color_theme = 0
+font_directory = "/Users/joonhohwangbo/Documents/fonts/SourceCodePro/"
+
+[[color_themes]]
+name = "tokyonight"
+
+[color_themes.colors]
+magenta = "#ad8ee6"
+darkblue = "#1a1b26"
+lightblue = "#7dcfff"
+bg = "#1a1b26"
+yellow = "#e0af68"
+cyan = "#7aa2f7"
+red = "#f7768e"
+fg = "#c0caf5"
+orange = "#ff9e64"
+green = "#9ece6a"
+purple = "#bb9af7"

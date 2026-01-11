@@ -103,7 +103,8 @@ yellow = "#e0af68""##);
                 ui.separator();
                 ui.label("• Diagrams are saved as JSON files (.json)");
                 ui.label("• Export to SVG for use in other applications");
-                ui.label("• Settings are stored in settings.toml");
+                ui.label("• Settings are loaded from ~/.config/suyu.toml (or settings.toml in current directory)");
+                ui.label("• Use ⌘O, ⌘S, ⌘⇧S for file dialogs to choose save/load locations");
 
                 ui.add_space(20.0);
                 ui.heading("Tips");

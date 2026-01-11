@@ -450,9 +450,9 @@ impl CommandPalette {
             CommandId::ConnectLine => app.auto_connect_selected(model::ArrowStyle::None),
             CommandId::ConnectArrow => app.auto_connect_selected(model::ArrowStyle::End),
             CommandId::ConnectBidirectional => app.auto_connect_selected(model::ArrowStyle::Both),
-            CommandId::SaveJson => app.save_to_path(),
-            CommandId::LoadJson => app.load_from_path(),
-            CommandId::ExportSvg => app.save_svg_to_path(),
+            CommandId::SaveJson => app.save_json_dialog(),
+            CommandId::LoadJson => app.open_json_dialog(),
+            CommandId::ExportSvg => app.save_svg_dialog(),
             CommandId::ToggleSnap => {
                 app.snap_to_grid = !app.snap_to_grid;
                 app.persist_settings();

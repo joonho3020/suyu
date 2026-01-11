@@ -179,6 +179,7 @@ pub struct DiagramApp {
     clipboard: Option<ClipboardPayload>,
     drag_transform_recorded: bool,
     active_transform: Option<ActiveTransform>,
+    diagram_name: String,
     file_path: String,
     svg_path: String,
     settings_path: String,
@@ -203,8 +204,21 @@ pub struct DiagramApp {
 }
 
 impl DiagramApp {
+    fn config_path() -> Option<String> {
+        if let Some(home) = std::env::var_os("HOME") {
+            let path = std::path::PathBuf::from(home).join(".config").join("suyu.toml");
+            if path.exists() {
+                return Some(path.display().to_string());
+            }
+        }
+        if std::path::Path::new("settings.toml").exists() {
+            return Some("settings.toml".to_string());
+        }
+        None
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let settings_path = "settings.toml".to_string();
+        let settings_path = Self::config_path().unwrap_or_else(|| "settings.toml".to_string());
         let settings = settings::load_settings(&settings_path)
             .or_else(|| settings::load_settings("settings.json"))
             .unwrap_or_default();
@@ -220,6 +234,8 @@ impl DiagramApp {
         } else {
             Vec::new()
         };
+
+        let diagram_name = Self::generate_default_name();
 
         Self {
             doc: model::Document::default(),
@@ -239,6 +255,7 @@ impl DiagramApp {
             clipboard: None,
             drag_transform_recorded: false,
             active_transform: None,
+            diagram_name,
             file_path: settings.file_path,
             svg_path: settings.svg_path,
             settings_path,
@@ -261,6 +278,22 @@ impl DiagramApp {
             loaded_fonts,
             show_help: false,
         }
+    }
+
+    fn generate_default_name() -> String {
+        let now = std::time::SystemTime::now();
+        let since_epoch = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        let secs = since_epoch.as_secs();
+        let days = secs / 86400;
+        let years_since_1970 = days / 365;
+        let year = 1970 + years_since_1970;
+        let remaining_days = days % 365;
+        let month = (remaining_days / 30) + 1;
+        let day = (remaining_days % 30) + 1;
+        let day_secs = secs % 86400;
+        let hour = day_secs / 3600;
+        let minute = (day_secs % 3600) / 60;
+        format!("diagram-{:04}-{:02}-{:02}-{:02}{:02}", year, month, day, hour, minute)
     }
 
     pub(super) fn load_custom_fonts(ctx: &egui::Context, font_dir: &str) -> Vec<String> {

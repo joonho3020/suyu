@@ -52,13 +52,13 @@ impl eframe::App for DiagramApp {
                 self.command_palette.open("");
             }
             if i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::S) {
-                self.save_svg_to_path();
+                self.save_svg_dialog();
             }
             if i.consume_key(egui::Modifiers::COMMAND, egui::Key::S) {
-                self.save_to_path();
+                self.save_json_dialog();
             }
             if i.consume_key(egui::Modifiers::COMMAND, egui::Key::O) {
-                self.load_from_path();
+                self.open_json_dialog();
             }
             let skip_shortcuts = wants_keyboard || self.inline_text_editing || self.command_palette.open;
 
@@ -179,28 +179,41 @@ impl eframe::App for DiagramApp {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                        ui.label("JSON Path:");
+                        ui.label("Diagram name:");
+                        ui.text_edit_singleline(&mut self.diagram_name);
+                        ui.separator();
+                        if ui.button("Open... (⌘O)").clicked() {
+                            self.open_json_dialog();
+                            ui.close_menu();
+                        }
+                        if ui.button("Save JSON... (⌘S)").clicked() {
+                            self.save_json_dialog();
+                            ui.close_menu();
+                        }
+                        if ui.button("Export SVG... (⌘⇧S)").clicked() {
+                            self.save_svg_dialog();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Quick save paths:");
+                        ui.small("JSON:");
                         if ui.text_edit_singleline(&mut self.file_path).changed() {
                             self.persist_settings();
                         }
-                        ui.separator();
-                        if ui.button("Load (⌘O)").clicked() {
-                            self.load_from_path();
-                            ui.close_menu();
-                        }
-                        if ui.button("Save (⌘S)").clicked() {
-                            self.save_to_path();
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        ui.label("SVG Path:");
+                        ui.small("SVG:");
                         if ui.text_edit_singleline(&mut self.svg_path).changed() {
                             self.persist_settings();
                         }
-                        if ui.button("Export SVG (⌘⇧S)").clicked() {
-                            self.save_svg_to_path();
-                            ui.close_menu();
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.small_button("Quick Save JSON").clicked() {
+                                self.save_to_path();
+                                ui.close_menu();
+                            }
+                            if ui.small_button("Quick Save SVG").clicked() {
+                                self.save_svg_to_path();
+                                ui.close_menu();
+                            }
+                        });
                     });
                 });
                 ui.menu_button("Edit", |ui| {
@@ -697,12 +710,13 @@ impl eframe::App for DiagramApp {
                     self.persist_settings();
                 }
 
+                let theme_colors = self.get_theme_colors();
                 if self.selected.len() == 1 {
                     let selected_id = *self.selected.iter().next().unwrap();
                     if let Some(idx) = self.element_index_by_id(selected_id) {
                         let original_style = self.doc.elements[idx].style.clone();
                         let mut style = original_style.clone();
-                        let style_changed = style_editor(ui, &mut style) && style != original_style;
+                        let style_changed = style_editor(ui, &mut style, &theme_colors) && style != original_style;
 
                         let mut push_undo_on_focus = false;
                         match &mut self.doc.elements[idx].kind {
@@ -958,14 +972,14 @@ impl eframe::App for DiagramApp {
                         }
                     } else {
                         let mut style = self.style.clone();
-                        if style_editor(ui, &mut style) && style != self.style {
+                        if style_editor(ui, &mut style, &theme_colors) && style != self.style {
                             self.push_undo();
                             self.style = style;
                         }
                     }
                 } else {
                     let mut style = self.style.clone();
-                    if style_editor(ui, &mut style) && style != self.style {
+                    if style_editor(ui, &mut style, &theme_colors) && style != self.style {
                         self.push_undo();
                         self.style = style.clone();
                         if self.apply_style_to_selection && !self.selected.is_empty() {
@@ -1084,45 +1098,6 @@ impl eframe::App for DiagramApp {
                 }
 
                 ui.separator();
-                ui.heading("Layers");
-                ui.separator();
-                let items: Vec<(u64, String, bool)> = self
-                    .doc
-                    .elements
-                    .iter()
-                    .rev()
-                    .map(|e| (e.id, element_label(e), self.selected.contains(&e.id)))
-                    .collect();
-                for (id, label, is_selected) in items {
-                    let clicked = ui.selectable_label(is_selected, label).clicked();
-                    if clicked {
-                        let shift = ctx.input(|i| i.modifiers.shift);
-                        if shift {
-                            self.toggle_selection(id);
-                        } else {
-                            self.set_selection_single(id);
-                        }
-                    }
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Up").clicked() {
-                        self.move_selected_layer_by(1);
-                    }
-                    if ui.button("Down").clicked() {
-                        self.move_selected_layer_by(-1);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Group").clicked() {
-                        self.group_selected();
-                    }
-                    if ui.button("Ungroup").clicked() {
-                        self.ungroup_selected();
-                    }
-                });
-
-                ui.separator();
                 ui.heading("Color Themes");
                 let mut theme_selection = self.active_color_theme;
                 egui::ComboBox::from_id_salt("color_theme_select")
@@ -1217,6 +1192,41 @@ impl eframe::App for DiagramApp {
                     self.show_help = true;
                 }
                 ui.label("Shortcuts: Space/⌘⇧P: commands, V/R/O/L/A/P/T: tools");
+
+                ui.separator();
+                ui.heading("Layers");
+                let items: Vec<(u64, String, bool)> = self
+                    .doc
+                    .elements
+                    .iter()
+                    .rev()
+                    .map(|e| (e.id, element_label(e), self.selected.contains(&e.id)))
+                    .collect();
+                for (id, label, is_selected) in items {
+                    let clicked = ui.selectable_label(is_selected, label).clicked();
+                    if clicked {
+                        let shift = ctx.input(|i| i.modifiers.shift);
+                        if shift {
+                            self.toggle_selection(id);
+                        } else {
+                            self.set_selection_single(id);
+                        }
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("▲").clicked() {
+                        self.move_selected_layer_by(1);
+                    }
+                    if ui.button("▼").clicked() {
+                        self.move_selected_layer_by(-1);
+                    }
+                    if ui.button("Group").clicked() {
+                        self.group_selected();
+                    }
+                    if ui.button("Ungroup").clicked() {
+                        self.ungroup_selected();
+                    }
+                });
                 });
             });
 

@@ -10,6 +10,27 @@ use super::{settings, svg};
 use super::{ClipboardPayload, DiagramApp, LineEndpoint, Snapshot};
 
 impl DiagramApp {
+    pub(super) fn get_theme_colors(&self) -> Vec<egui::Color32> {
+        if let Some(idx) = self.active_color_theme {
+            if let Some(theme) = self.color_themes.get(idx) {
+                return theme.colors.values()
+                    .filter_map(|hex| {
+                        let hex = hex.trim_start_matches('#');
+                        if hex.len() >= 6 {
+                            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                            Some(egui::Color32::from_rgb(r, g, b))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
     pub(super) fn allocate_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -783,11 +804,80 @@ impl DiagramApp {
         }
     }
 
+    pub(super) fn save_json_dialog(&mut self) {
+        let default_name = format!("{}.json", self.diagram_name);
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("JSON", &["json"])
+            .save_file()
+        {
+            let path_str = path.display().to_string();
+            match serde_json::to_string_pretty(&self.doc) {
+                Ok(json) => match std::fs::write(&path, json) {
+                    Ok(()) => {
+                        self.file_path = path_str.clone();
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            self.diagram_name = stem.to_string();
+                        }
+                        self.status = Some(format!("Saved {}", path_str));
+                    }
+                    Err(e) => self.status = Some(format!("Save failed: {e}")),
+                },
+                Err(e) => self.status = Some(format!("Serialize failed: {e}")),
+            }
+        }
+    }
+
     pub(super) fn save_svg_to_path(&mut self) {
         let svg = svg::document_to_svg(&self.doc);
         match std::fs::write(&self.svg_path, svg) {
             Ok(()) => self.status = Some(format!("Saved {}", self.svg_path)),
             Err(e) => self.status = Some(format!("SVG save failed: {e}")),
+        }
+    }
+
+    pub(super) fn save_svg_dialog(&mut self) {
+        let default_name = format!("{}.svg", self.diagram_name);
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("SVG", &["svg"])
+            .save_file()
+        {
+            let path_str = path.display().to_string();
+            let svg = svg::document_to_svg(&self.doc);
+            match std::fs::write(&path, svg) {
+                Ok(()) => {
+                    self.svg_path = path_str.clone();
+                    self.status = Some(format!("Saved {}", path_str));
+                }
+                Err(e) => self.status = Some(format!("SVG save failed: {e}")),
+            }
+        }
+    }
+
+    pub(super) fn open_json_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("JSON", &["json"])
+            .pick_file()
+        {
+            let path_str = path.display().to_string();
+            match std::fs::read_to_string(&path) {
+                Ok(json) => match serde_json::from_str::<model::Document>(&json) {
+                    Ok(doc) => {
+                        self.push_undo();
+                        self.doc = doc;
+                        self.file_path = path_str.clone();
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            self.diagram_name = stem.to_string();
+                        }
+                        self.selected.clear();
+                        self.next_id = self.doc.elements.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+                        self.status = Some(format!("Loaded {}", path_str));
+                    }
+                    Err(e) => self.status = Some(format!("Parse failed: {e}")),
+                },
+                Err(e) => self.status = Some(format!("Read failed: {e}")),
+            }
         }
     }
 
