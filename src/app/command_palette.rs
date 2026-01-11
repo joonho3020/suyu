@@ -48,6 +48,27 @@ pub(super) enum CommandId {
     ExportSvg,
     ToggleSnap,
     SnapSelectionToGrid,
+    SetTextSize,
+    SetStrokeWidth,
+    SetStrokeColor,
+    SetFillColor,
+    SetFillNone,
+    SetWidth,
+    SetHeight,
+    FontProportional,
+    FontMonospace,
+    TextAlignLeft,
+    TextAlignCenter,
+    TextAlignRight,
+    LineStyleSolid,
+    LineStyleDashed,
+    LineStyleDotted,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    SetZoom,
+    SelectAll,
+    DeselectAll,
 }
 
 pub(super) struct CommandSpec {
@@ -73,6 +94,8 @@ const COMMANDS: &[CommandSpec] = &[
     CommandSpec { id: CommandId::Redo, name: "Edit: Redo", search: "redo" },
     CommandSpec { id: CommandId::Duplicate, name: "Edit: Duplicate", search: "duplicate clone" },
     CommandSpec { id: CommandId::Delete, name: "Edit: Delete", search: "delete remove" },
+    CommandSpec { id: CommandId::SelectAll, name: "Edit: Select All", search: "select all" },
+    CommandSpec { id: CommandId::DeselectAll, name: "Edit: Deselect All", search: "deselect clear selection" },
     CommandSpec { id: CommandId::Group, name: "Group: Group", search: "group" },
     CommandSpec { id: CommandId::Ungroup, name: "Group: Ungroup", search: "ungroup" },
     CommandSpec { id: CommandId::BringFront, name: "Layer: Bring to front", search: "front bring layer" },
@@ -97,7 +120,39 @@ const COMMANDS: &[CommandSpec] = &[
     CommandSpec { id: CommandId::ExportSvg, name: "File: Export SVG", search: "export svg save" },
     CommandSpec { id: CommandId::ToggleSnap, name: "Grid: Toggle snap", search: "grid snap toggle" },
     CommandSpec { id: CommandId::SnapSelectionToGrid, name: "Grid: Snap selection", search: "grid snap selection" },
+    CommandSpec { id: CommandId::SetTextSize, name: "Format: Set Text Size...", search: "text size font pt" },
+    CommandSpec { id: CommandId::SetStrokeWidth, name: "Format: Set Stroke Width...", search: "stroke width px line thickness" },
+    CommandSpec { id: CommandId::SetStrokeColor, name: "Format: Set Stroke Color...", search: "stroke color rgb hex" },
+    CommandSpec { id: CommandId::SetFillColor, name: "Format: Set Fill Color...", search: "fill color rgb hex background" },
+    CommandSpec { id: CommandId::SetFillNone, name: "Format: No Fill", search: "fill none transparent clear" },
+    CommandSpec { id: CommandId::SetWidth, name: "Object: Set Width...", search: "width size resize horizontal" },
+    CommandSpec { id: CommandId::SetHeight, name: "Object: Set Height...", search: "height size resize vertical" },
+    CommandSpec { id: CommandId::FontProportional, name: "Format: Font Proportional", search: "font proportional sans serif" },
+    CommandSpec { id: CommandId::FontMonospace, name: "Format: Font Monospace", search: "font monospace code" },
+    CommandSpec { id: CommandId::TextAlignLeft, name: "Format: Text Align Left", search: "text align left" },
+    CommandSpec { id: CommandId::TextAlignCenter, name: "Format: Text Align Center", search: "text align center" },
+    CommandSpec { id: CommandId::TextAlignRight, name: "Format: Text Align Right", search: "text align right" },
+    CommandSpec { id: CommandId::LineStyleSolid, name: "Format: Line Solid", search: "line style solid" },
+    CommandSpec { id: CommandId::LineStyleDashed, name: "Format: Line Dashed", search: "line style dashed" },
+    CommandSpec { id: CommandId::LineStyleDotted, name: "Format: Line Dotted", search: "line style dotted" },
+    CommandSpec { id: CommandId::ZoomIn, name: "View: Zoom In", search: "zoom in larger" },
+    CommandSpec { id: CommandId::ZoomOut, name: "View: Zoom Out", search: "zoom out smaller" },
+    CommandSpec { id: CommandId::ZoomReset, name: "View: Reset Zoom", search: "zoom reset 100" },
+    CommandSpec { id: CommandId::SetZoom, name: "View: Set Zoom...", search: "zoom set percent" },
 ];
+
+#[derive(Clone, Debug, Default)]
+pub(super) enum InputMode {
+    #[default]
+    None,
+    TextSize,
+    StrokeWidth,
+    StrokeColor,
+    FillColor,
+    Width,
+    Height,
+    Zoom,
+}
 
 #[derive(Default)]
 pub(super) struct CommandPalette {
@@ -105,6 +160,8 @@ pub(super) struct CommandPalette {
     pub query: String,
     pub selected: usize,
     request_focus: bool,
+    input_mode: InputMode,
+    input_value: String,
 }
 
 #[derive(Clone, Copy)]
@@ -114,6 +171,7 @@ pub(super) struct CommandContext {
     pub has_redo: bool,
     pub can_ungroup: bool,
     pub snap_to_grid: bool,
+    pub has_resizable: bool,
 }
 
 impl CommandPalette {
@@ -122,6 +180,8 @@ impl CommandPalette {
         self.query = query.into();
         self.selected = 0;
         self.request_focus = true;
+        self.input_mode = InputMode::None;
+        self.input_value.clear();
     }
 
     pub fn close(&mut self) {
@@ -129,6 +189,8 @@ impl CommandPalette {
         self.query.clear();
         self.selected = 0;
         self.request_focus = false;
+        self.input_mode = InputMode::None;
+        self.input_value.clear();
     }
 
     fn is_enabled(cx: CommandContext, id: CommandId) -> bool {
@@ -150,8 +212,144 @@ impl CommandPalette {
             | CommandId::AbutV => cx.selected_len >= 2,
             CommandId::ConnectLine | CommandId::ConnectArrow | CommandId::ConnectBidirectional => cx.selected_len == 2,
             CommandId::SnapSelectionToGrid => cx.selected_len > 0 && cx.snap_to_grid,
+            CommandId::SetWidth | CommandId::SetHeight => cx.has_resizable,
             _ => true,
         }
+    }
+
+    fn apply_style_change<F>(app: &mut DiagramApp, f: F)
+    where
+        F: Fn(&mut model::Style),
+    {
+        app.push_undo();
+        f(&mut app.style);
+        if !app.selected.is_empty() {
+            for e in &mut app.doc.elements {
+                if app.selected.contains(&e.id) {
+                    f(&mut e.style);
+                }
+            }
+        }
+    }
+
+    fn apply_size_change(app: &mut DiagramApp, set_width: Option<f32>, set_height: Option<f32>) {
+        if app.selected.is_empty() {
+            return;
+        }
+        app.push_undo();
+        for e in &mut app.doc.elements {
+            if !app.selected.contains(&e.id) {
+                continue;
+            }
+            match &mut e.kind {
+                model::ElementKind::Rect { rect, .. }
+                | model::ElementKind::Ellipse { rect, .. }
+                | model::ElementKind::Triangle { rect, .. }
+                | model::ElementKind::Parallelogram { rect, .. }
+                | model::ElementKind::Trapezoid { rect, .. } => {
+                    if let Some(w) = set_width {
+                        rect.max.x = rect.min.x + w;
+                    }
+                    if let Some(h) = set_height {
+                        rect.max.y = rect.min.y + h;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn parse_color(s: &str) -> Option<model::Rgba> {
+        let s = s.trim().trim_start_matches('#');
+        if s.len() == 6 {
+            let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+            return Some(model::Rgba { r, g, b, a: 255 });
+        }
+        if s.len() == 3 {
+            let r = u8::from_str_radix(&s[0..1], 16).ok()? * 17;
+            let g = u8::from_str_radix(&s[1..2], 16).ok()? * 17;
+            let b = u8::from_str_radix(&s[2..3], 16).ok()? * 17;
+            return Some(model::Rgba { r, g, b, a: 255 });
+        }
+        let parts: Vec<&str> = s.split(&[',', ' ']).filter(|p| !p.is_empty()).collect();
+        if parts.len() == 3 {
+            let r: u8 = parts[0].trim().parse().ok()?;
+            let g: u8 = parts[1].trim().parse().ok()?;
+            let b: u8 = parts[2].trim().parse().ok()?;
+            return Some(model::Rgba { r, g, b, a: 255 });
+        }
+        match s.to_lowercase().as_str() {
+            "black" => Some(model::Rgba { r: 0, g: 0, b: 0, a: 255 }),
+            "white" => Some(model::Rgba { r: 255, g: 255, b: 255, a: 255 }),
+            "red" => Some(model::Rgba { r: 200, g: 40, b: 40, a: 255 }),
+            "green" => Some(model::Rgba { r: 40, g: 140, b: 60, a: 255 }),
+            "blue" => Some(model::Rgba { r: 40, g: 90, b: 200, a: 255 }),
+            "yellow" => Some(model::Rgba { r: 200, g: 200, b: 40, a: 255 }),
+            "orange" => Some(model::Rgba { r: 200, g: 140, b: 40, a: 255 }),
+            "purple" => Some(model::Rgba { r: 130, g: 60, b: 180, a: 255 }),
+            "gray" | "grey" => Some(model::Rgba { r: 128, g: 128, b: 128, a: 255 }),
+            _ => None,
+        }
+    }
+
+    fn execute_with_value(app: &mut DiagramApp, mode: &InputMode, value: &str) -> bool {
+        match mode {
+            InputMode::TextSize => {
+                if let Ok(size) = value.trim().parse::<f32>() {
+                    if size > 0.0 && size <= 200.0 {
+                        Self::apply_style_change(app, |s| s.text_size = size);
+                        return true;
+                    }
+                }
+            }
+            InputMode::StrokeWidth => {
+                if let Ok(width) = value.trim().parse::<f32>() {
+                    if width > 0.0 && width <= 50.0 {
+                        Self::apply_style_change(app, |s| s.stroke.width = width);
+                        return true;
+                    }
+                }
+            }
+            InputMode::StrokeColor => {
+                if let Some(color) = Self::parse_color(value) {
+                    Self::apply_style_change(app, |s| s.stroke.color = color);
+                    return true;
+                }
+            }
+            InputMode::FillColor => {
+                if let Some(color) = Self::parse_color(value) {
+                    Self::apply_style_change(app, |s| s.fill = Some(color));
+                    return true;
+                }
+            }
+            InputMode::Width => {
+                if let Ok(w) = value.trim().parse::<f32>() {
+                    if w > 0.0 {
+                        Self::apply_size_change(app, Some(w), None);
+                        return true;
+                    }
+                }
+            }
+            InputMode::Height => {
+                if let Ok(h) = value.trim().parse::<f32>() {
+                    if h > 0.0 {
+                        Self::apply_size_change(app, None, Some(h));
+                        return true;
+                    }
+                }
+            }
+            InputMode::Zoom => {
+                if let Ok(z) = value.trim().trim_end_matches('%').parse::<f32>() {
+                    let zoom = (z / 100.0).clamp(0.1, 8.0);
+                    app.view.zoom = zoom;
+                    return true;
+                }
+            }
+            InputMode::None => {}
+        }
+        false
     }
 
     pub(super) fn execute(app: &mut DiagramApp, ctx: &egui::Context, id: CommandId) {
@@ -172,6 +370,12 @@ impl CommandPalette {
             CommandId::Redo => app.redo(),
             CommandId::Duplicate => app.duplicate_selected(),
             CommandId::Delete => app.delete_selected(),
+            CommandId::SelectAll => {
+                for e in &app.doc.elements {
+                    app.selected.insert(e.id);
+                }
+            }
+            CommandId::DeselectAll => app.clear_selection(),
             CommandId::Group => app.group_selected(),
             CommandId::Ungroup => app.ungroup_selected(),
             CommandId::BringFront => app.bring_selected_to_front(),
@@ -232,6 +436,49 @@ impl CommandPalette {
                 app.push_undo();
                 app.snap_selected_to_grid();
             }
+            CommandId::SetFillNone => {
+                Self::apply_style_change(app, |s| s.fill = None);
+            }
+            CommandId::FontProportional => {
+                Self::apply_style_change(app, |s| s.font_family = model::FontFamily::Proportional);
+            }
+            CommandId::FontMonospace => {
+                Self::apply_style_change(app, |s| s.font_family = model::FontFamily::Monospace);
+            }
+            CommandId::TextAlignLeft => {
+                Self::apply_style_change(app, |s| s.text_align = model::TextAlign::Left);
+            }
+            CommandId::TextAlignCenter => {
+                Self::apply_style_change(app, |s| s.text_align = model::TextAlign::Center);
+            }
+            CommandId::TextAlignRight => {
+                Self::apply_style_change(app, |s| s.text_align = model::TextAlign::Right);
+            }
+            CommandId::LineStyleSolid => {
+                Self::apply_style_change(app, |s| s.stroke.line_style = model::LineStyle::Solid);
+            }
+            CommandId::LineStyleDashed => {
+                Self::apply_style_change(app, |s| s.stroke.line_style = model::LineStyle::Dashed);
+            }
+            CommandId::LineStyleDotted => {
+                Self::apply_style_change(app, |s| s.stroke.line_style = model::LineStyle::Dotted);
+            }
+            CommandId::ZoomIn => {
+                app.view.zoom = (app.view.zoom * 1.25).min(8.0);
+            }
+            CommandId::ZoomOut => {
+                app.view.zoom = (app.view.zoom / 1.25).max(0.1);
+            }
+            CommandId::ZoomReset => {
+                app.view.zoom = 1.0;
+            }
+            CommandId::SetTextSize
+            | CommandId::SetStrokeWidth
+            | CommandId::SetStrokeColor
+            | CommandId::SetFillColor
+            | CommandId::SetWidth
+            | CommandId::SetHeight
+            | CommandId::SetZoom => {}
         }
         ctx.request_repaint();
     }
@@ -252,31 +499,56 @@ impl CommandPalette {
         out
     }
 
+    fn input_mode_for_command(id: CommandId) -> Option<InputMode> {
+        match id {
+            CommandId::SetTextSize => Some(InputMode::TextSize),
+            CommandId::SetStrokeWidth => Some(InputMode::StrokeWidth),
+            CommandId::SetStrokeColor => Some(InputMode::StrokeColor),
+            CommandId::SetFillColor => Some(InputMode::FillColor),
+            CommandId::SetWidth => Some(InputMode::Width),
+            CommandId::SetHeight => Some(InputMode::Height),
+            CommandId::SetZoom => Some(InputMode::Zoom),
+            _ => None,
+        }
+    }
+
+    fn input_prompt(mode: &InputMode) -> &'static str {
+        match mode {
+            InputMode::TextSize => "Enter text size (e.g. 16):",
+            InputMode::StrokeWidth => "Enter stroke width (e.g. 2):",
+            InputMode::StrokeColor => "Enter color (hex #ff0000, rgb 255,0,0, or name):",
+            InputMode::FillColor => "Enter fill color (hex #ff0000, rgb 255,0,0, or name):",
+            InputMode::Width => "Enter width:",
+            InputMode::Height => "Enter height:",
+            InputMode::Zoom => "Enter zoom % (e.g. 100):",
+            InputMode::None => "",
+        }
+    }
+
     pub fn ui(&mut self, ctx: &egui::Context, cx: CommandContext) -> Option<CommandId> {
         if !self.open {
             return None;
         }
-        let matches = self.filtered();
-        if self.selected >= matches.len() {
-            self.selected = matches.len().saturating_sub(1);
-        }
+
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.close();
+            if matches!(self.input_mode, InputMode::None) {
+                self.close();
+            } else {
+                self.input_mode = InputMode::None;
+                self.input_value.clear();
+                self.request_focus = true;
+            }
             return None;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && !matches.is_empty() {
-            self.selected = (self.selected + 1).min(matches.len() - 1);
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && !matches.is_empty() {
-            self.selected = self.selected.saturating_sub(1);
-        }
-        let mut run_selected = ctx.input(|i| i.key_pressed(egui::Key::Enter));
 
         let screen = ctx.content_rect();
         let width = 560.0;
         let height = 320.0;
         let pos = egui::pos2(screen.center().x - width * 0.5, screen.top() + 48.0);
         let area_id = egui::Id::new("command_palette");
+
+        let mut result: Option<CommandId> = None;
+
         egui::Area::new(area_id)
             .fixed_pos(pos)
             .order(egui::Order::Foreground)
@@ -288,42 +560,110 @@ impl CommandPalette {
                     .corner_radius(egui::CornerRadius::same(8));
                 frame.show(ui, |ui| {
                     ui.set_min_size(egui::vec2(width, height));
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.query)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("Search commands"),
-                    );
-                    if self.request_focus {
-                        resp.request_focus();
-                        self.request_focus = false;
-                    }
-                    ui.separator();
-                    egui::ScrollArea::vertical().max_height(height - 64.0).show(ui, |ui| {
-                        for (idx, (spec, _score)) in matches.iter().take(24).enumerate() {
-                            let enabled = CommandPalette::is_enabled(cx, spec.id);
-                            let selected = idx == self.selected;
-                            let resp = ui.add_enabled(
-                                enabled,
-                                egui::Button::new(spec.name).selected(selected),
-                            );
-                            if resp.clicked() {
-                                self.selected = idx;
-                                run_selected = true;
+
+                    if matches!(self.input_mode, InputMode::None) {
+                        let matches = self.filtered();
+                        if self.selected >= matches.len() {
+                            self.selected = matches.len().saturating_sub(1);
+                        }
+
+                        if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && !matches.is_empty() {
+                            self.selected = (self.selected + 1).min(matches.len() - 1);
+                        }
+                        if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && !matches.is_empty() {
+                            self.selected = self.selected.saturating_sub(1);
+                        }
+                        let enter_pressed = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.query)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("Search commands..."),
+                        );
+                        if self.request_focus {
+                            resp.request_focus();
+                            self.request_focus = false;
+                        }
+                        ui.separator();
+
+                        let scroll_id = ui.id().with("cmd_scroll");
+                        egui::ScrollArea::vertical()
+                            .id_salt(scroll_id)
+                            .max_height(height - 64.0)
+                            .show(ui, |ui| {
+                                for (idx, (spec, _score)) in matches.iter().enumerate() {
+                                    let enabled = CommandPalette::is_enabled(cx, spec.id);
+                                    let selected = idx == self.selected;
+                                    let resp = ui.add_enabled(
+                                        enabled,
+                                        egui::Button::new(spec.name).selected(selected),
+                                    );
+                                    if selected {
+                                        resp.scroll_to_me(Some(egui::Align::Center));
+                                    }
+                                    if resp.clicked() {
+                                        self.selected = idx;
+                                        if let Some(mode) = Self::input_mode_for_command(spec.id) {
+                                            self.input_mode = mode;
+                                            self.input_value.clear();
+                                            self.request_focus = true;
+                                        } else {
+                                            result = Some(spec.id);
+                                            self.close();
+                                        }
+                                    }
+                                }
+                            });
+
+                        if enter_pressed {
+                            if let Some((spec, _)) = matches.get(self.selected) {
+                                if CommandPalette::is_enabled(cx, spec.id) {
+                                    if let Some(mode) = Self::input_mode_for_command(spec.id) {
+                                        self.input_mode = mode;
+                                        self.input_value.clear();
+                                        self.request_focus = true;
+                                    } else {
+                                        result = Some(spec.id);
+                                        self.close();
+                                    }
+                                }
                             }
                         }
-                    });
+                    } else {
+                        ui.label(Self::input_prompt(&self.input_mode));
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.input_value)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("Enter value..."),
+                        );
+                        if self.request_focus {
+                            resp.request_focus();
+                            self.request_focus = false;
+                        }
+
+                        ui.separator();
+                        ui.label("Press Enter to apply, Escape to cancel");
+                    }
                 });
             });
 
-        if run_selected {
-            if let Some((spec, _)) = matches.get(self.selected) {
-                if CommandPalette::is_enabled(cx, spec.id) {
-                    let cmd = spec.id;
-                    self.close();
-                    return Some(cmd);
-                }
-            }
+        result
+    }
+
+    pub fn take_input_data(&mut self) -> Option<(InputMode, String)> {
+        if matches!(self.input_mode, InputMode::None) {
+            return None;
         }
-        None
+        let mode = std::mem::take(&mut self.input_mode);
+        let value = std::mem::take(&mut self.input_value);
+        Some((mode, value))
+    }
+
+    pub fn execute_input(app: &mut DiagramApp, mode: InputMode, value: &str) -> bool {
+        Self::execute_with_value(app, &mode, value)
+    }
+
+    pub fn is_awaiting_input(&self) -> bool {
+        !matches!(self.input_mode, InputMode::None)
     }
 }

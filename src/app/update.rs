@@ -173,56 +173,507 @@ impl eframe::App for DiagramApp {
         });
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                tool_button(ui, "Select (V)", Tool::Select, &mut self.tool);
-                tool_button(ui, "Rect (R)", Tool::Rectangle, &mut self.tool);
-                tool_button(ui, "Ellipse (O)", Tool::Ellipse, &mut self.tool);
-                tool_button(ui, "△ (⇧T)", Tool::Triangle, &mut self.tool);
-                tool_button(ui, "▱ (⇧P)", Tool::Parallelogram, &mut self.tool);
-                tool_button(ui, "⏢ (⇧Z)", Tool::Trapezoid, &mut self.tool);
-                tool_button(ui, "Line (L)", Tool::Line, &mut self.tool);
-                tool_button(ui, "Arrow (A)", Tool::Arrow, &mut self.tool);
-                tool_button(ui, "↔ (⇧A)", Tool::BidirectionalArrow, &mut self.tool);
-                tool_button(ui, "⌇ (⇧L)", Tool::Polyline, &mut self.tool);
-                tool_button(ui, "Pen (P)", Tool::Pen, &mut self.tool);
-                tool_button(ui, "Text (T)", Tool::Text, &mut self.tool);
-                tool_button(ui, "Pan (Space)", Tool::Pan, &mut self.tool);
+            egui::menu::bar(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                        ui.label("JSON Path:");
+                        if ui.text_edit_singleline(&mut self.file_path).changed() {
+                            self.persist_settings();
+                        }
+                        ui.separator();
+                        if ui.button("Load (⌘O)").clicked() {
+                            self.load_from_path();
+                            ui.close_menu();
+                        }
+                        if ui.button("Save (⌘S)").clicked() {
+                            self.save_to_path();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("SVG Path:");
+                        if ui.text_edit_singleline(&mut self.svg_path).changed() {
+                            self.persist_settings();
+                        }
+                        if ui.button("Export SVG (⌘⇧S)").clicked() {
+                            self.save_svg_to_path();
+                            ui.close_menu();
+                        }
+                    });
+                });
+                ui.menu_button("Edit", |ui| {
+                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                        if ui.add_enabled(!self.history.is_empty(), egui::Button::new("Undo (⌘Z)")).clicked() {
+                            self.undo();
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(!self.future.is_empty(), egui::Button::new("Redo (⌘⇧Z)")).clicked() {
+                            self.redo();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.add_enabled(!self.selected.is_empty(), egui::Button::new("Cut (⌘X)")).clicked() {
+                            self.cut_selected(ctx);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(!self.selected.is_empty(), egui::Button::new("Copy (⌘C)")).clicked() {
+                            self.copy_selected(ctx);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.clipboard.is_some(), egui::Button::new("Paste (⌘V)")).clicked() {
+                            self.paste();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.add_enabled(!self.selected.is_empty(), egui::Button::new("Duplicate (⌘D)")).clicked() {
+                            self.duplicate_selected();
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(!self.selected.is_empty(), egui::Button::new("Delete (Del)")).clicked() {
+                            self.delete_selected();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Select All (⌘A)").clicked() {
+                            for e in &self.doc.elements {
+                                self.selected.insert(e.id);
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Deselect All").clicked() {
+                            self.clear_selection();
+                            ui.close_menu();
+                        }
+                    });
+                });
+                ui.menu_button("Object", |ui| {
+                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                        ui.label("Arrange");
+                        if ui.add_enabled(!self.selected.is_empty(), egui::Button::new("Bring to Front")).clicked() {
+                            self.bring_selected_to_front();
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(!self.selected.is_empty(), egui::Button::new("Send to Back")).clicked() {
+                            self.send_selected_to_back();
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(!self.selected.is_empty(), egui::Button::new("Move Up")).clicked() {
+                            self.move_selected_layer_by(1);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(!self.selected.is_empty(), egui::Button::new("Move Down")).clicked() {
+                            self.move_selected_layer_by(-1);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Group");
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Group")).clicked() {
+                            self.group_selected();
+                            ui.close_menu();
+                        }
+                        let can_ungroup = self.selected.iter().any(|id| self.group_of(*id).is_some());
+                        if ui.add_enabled(can_ungroup, egui::Button::new("Ungroup")).clicked() {
+                            self.ungroup_selected();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Align");
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Align Left")).clicked() {
+                            self.push_undo();
+                            align_selected(&mut self.doc, &self.selected, AlignMode::Left);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Align Center (H)")).clicked() {
+                            self.push_undo();
+                            align_selected(&mut self.doc, &self.selected, AlignMode::HCenter);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Align Right")).clicked() {
+                            self.push_undo();
+                            align_selected(&mut self.doc, &self.selected, AlignMode::Right);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Align Top")).clicked() {
+                            self.push_undo();
+                            align_selected(&mut self.doc, &self.selected, AlignMode::Top);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Align Middle (V)")).clicked() {
+                            self.push_undo();
+                            align_selected(&mut self.doc, &self.selected, AlignMode::VCenter);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Align Bottom")).clicked() {
+                            self.push_undo();
+                            align_selected(&mut self.doc, &self.selected, AlignMode::Bottom);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Distribute");
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Distribute Horizontally")).clicked() {
+                            self.push_undo();
+                            distribute_selected(&mut self.doc, &self.selected, DistributeMode::Horizontal);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Distribute Vertically")).clicked() {
+                            self.push_undo();
+                            distribute_selected(&mut self.doc, &self.selected, DistributeMode::Vertical);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Abut");
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Abut Horizontally")).clicked() {
+                            self.push_undo();
+                            abut_selected(&mut self.doc, &self.selected, AbutMode::Horizontal);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() >= 2, egui::Button::new("Abut Vertically")).clicked() {
+                            self.push_undo();
+                            abut_selected(&mut self.doc, &self.selected, AbutMode::Vertical);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Connect");
+                        if ui.add_enabled(self.selected.len() == 2, egui::Button::new("Connect (Line)")).clicked() {
+                            self.auto_connect_selected(model::ArrowStyle::None);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() == 2, egui::Button::new("Connect (Arrow)")).clicked() {
+                            self.auto_connect_selected(model::ArrowStyle::End);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.selected.len() == 2, egui::Button::new("Connect (Bidirectional)")).clicked() {
+                            self.auto_connect_selected(model::ArrowStyle::Both);
+                            ui.close_menu();
+                        }
+                    });
+                });
+                ui.menu_button("Format", |ui| {
+                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                        let has_selection = !self.selected.is_empty();
+                        ui.label("Stroke Color");
+                        let stroke_presets = [
+                            ("Black", egui::Color32::from_rgb(20, 20, 20)),
+                            ("Red", egui::Color32::from_rgb(200, 40, 40)),
+                            ("Green", egui::Color32::from_rgb(40, 140, 60)),
+                            ("Blue", egui::Color32::from_rgb(40, 90, 200)),
+                            ("Orange", egui::Color32::from_rgb(200, 140, 40)),
+                            ("Purple", egui::Color32::from_rgb(130, 60, 180)),
+                        ];
+                        for (name, color) in stroke_presets {
+                            if ui.button(name).clicked() {
+                                self.push_undo();
+                                self.style.stroke.color = model::Rgba::from_color32(color);
+                                if has_selection {
+                                    for e in &mut self.doc.elements {
+                                        if self.selected.contains(&e.id) {
+                                            e.style.stroke.color = self.style.stroke.color;
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        ui.label("Stroke Width");
+                        for width in [1.0, 2.0, 3.0, 4.0, 6.0, 8.0] {
+                            if ui.button(format!("{:.0}px", width)).clicked() {
+                                self.push_undo();
+                                self.style.stroke.width = width;
+                                if has_selection {
+                                    for e in &mut self.doc.elements {
+                                        if self.selected.contains(&e.id) {
+                                            e.style.stroke.width = width;
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        ui.label("Line Style");
+                        if ui.button("Solid").clicked() {
+                            self.push_undo();
+                            self.style.stroke.line_style = model::LineStyle::Solid;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.stroke.line_style = model::LineStyle::Solid;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Dashed").clicked() {
+                            self.push_undo();
+                            self.style.stroke.line_style = model::LineStyle::Dashed;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.stroke.line_style = model::LineStyle::Dashed;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Dotted").clicked() {
+                            self.push_undo();
+                            self.style.stroke.line_style = model::LineStyle::Dotted;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.stroke.line_style = model::LineStyle::Dotted;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Fill");
+                        if ui.button("No Fill").clicked() {
+                            self.push_undo();
+                            self.style.fill = None;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.fill = None;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        let fill_presets = [
+                            ("White", egui::Color32::from_rgb(255, 255, 255)),
+                            ("Light Gray", egui::Color32::from_rgb(200, 200, 200)),
+                            ("Light Red", egui::Color32::from_rgb(255, 200, 200)),
+                            ("Light Green", egui::Color32::from_rgb(200, 255, 200)),
+                            ("Light Blue", egui::Color32::from_rgb(200, 200, 255)),
+                            ("Light Yellow", egui::Color32::from_rgb(255, 255, 200)),
+                        ];
+                        for (name, color) in fill_presets {
+                            if ui.button(name).clicked() {
+                                self.push_undo();
+                                self.style.fill = Some(model::Rgba::from_color32(color));
+                                if has_selection {
+                                    for e in &mut self.doc.elements {
+                                        if self.selected.contains(&e.id) {
+                                            e.style.fill = self.style.fill;
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        ui.label("Text Size");
+                        for size in [10.0, 12.0, 14.0, 16.0, 18.0, 24.0, 32.0, 48.0] {
+                            if ui.button(format!("{:.0}pt", size)).clicked() {
+                                self.push_undo();
+                                self.style.text_size = size;
+                                if has_selection {
+                                    for e in &mut self.doc.elements {
+                                        if self.selected.contains(&e.id) {
+                                            e.style.text_size = size;
+                                        }
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                        ui.separator();
+                        ui.label("Font");
+                        if ui.button("Proportional").clicked() {
+                            self.push_undo();
+                            self.style.font_family = model::FontFamily::Proportional;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.font_family = model::FontFamily::Proportional;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Monospace").clicked() {
+                            self.push_undo();
+                            self.style.font_family = model::FontFamily::Monospace;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.font_family = model::FontFamily::Monospace;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Text Align");
+                        if ui.button("Left").clicked() {
+                            self.push_undo();
+                            self.style.text_align = model::TextAlign::Left;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.text_align = model::TextAlign::Left;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Center").clicked() {
+                            self.push_undo();
+                            self.style.text_align = model::TextAlign::Center;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.text_align = model::TextAlign::Center;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Right").clicked() {
+                            self.push_undo();
+                            self.style.text_align = model::TextAlign::Right;
+                            if has_selection {
+                                for e in &mut self.doc.elements {
+                                    if self.selected.contains(&e.id) {
+                                        e.style.text_align = model::TextAlign::Right;
+                                    }
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                    });
+                });
+                ui.menu_button("View", |ui| {
+                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                        ui.label("Zoom");
+                        if ui.button("Zoom In").clicked() {
+                            self.view.zoom = (self.view.zoom * 1.25).min(8.0);
+                            ui.close_menu();
+                        }
+                        if ui.button("Zoom Out").clicked() {
+                            self.view.zoom = (self.view.zoom / 1.25).max(0.1);
+                            ui.close_menu();
+                        }
+                        if ui.button("Reset Zoom (100%)").clicked() {
+                            self.view.zoom = 1.0;
+                            ui.close_menu();
+                        }
+                        if ui.button("Fit 50%").clicked() {
+                            self.view.zoom = 0.5;
+                            ui.close_menu();
+                        }
+                        if ui.button("Fit 200%").clicked() {
+                            self.view.zoom = 2.0;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Pan");
+                        if ui.button("Reset Pan").clicked() {
+                            self.view.pan_screen = egui::Vec2::ZERO;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Grid");
+                        if ui.checkbox(&mut self.snap_to_grid, "Snap to Grid").changed() {
+                            self.persist_settings();
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Size:");
+                            if ui.add(egui::DragValue::new(&mut self.grid_size).range(8.0..=128.0).speed(1.0)).changed() {
+                                self.persist_settings();
+                            }
+                        });
+                    });
+                });
+                ui.menu_button("Tools", |ui| {
+                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                        if ui.button("Select (V)").clicked() {
+                            self.tool = Tool::Select;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Shapes");
+                        if ui.button("Rectangle (R)").clicked() {
+                            self.tool = Tool::Rectangle;
+                            ui.close_menu();
+                        }
+                        if ui.button("Ellipse (O)").clicked() {
+                            self.tool = Tool::Ellipse;
+                            ui.close_menu();
+                        }
+                        if ui.button("Triangle (⇧T)").clicked() {
+                            self.tool = Tool::Triangle;
+                            ui.close_menu();
+                        }
+                        if ui.button("Parallelogram (⇧P)").clicked() {
+                            self.tool = Tool::Parallelogram;
+                            ui.close_menu();
+                        }
+                        if ui.button("Trapezoid (⇧Z)").clicked() {
+                            self.tool = Tool::Trapezoid;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Lines");
+                        if ui.button("Line (L)").clicked() {
+                            self.tool = Tool::Line;
+                            ui.close_menu();
+                        }
+                        if ui.button("Arrow (A)").clicked() {
+                            self.tool = Tool::Arrow;
+                            ui.close_menu();
+                        }
+                        if ui.button("Bidirectional Arrow (⇧A)").clicked() {
+                            self.tool = Tool::BidirectionalArrow;
+                            ui.close_menu();
+                        }
+                        if ui.button("Polyline (⇧L)").clicked() {
+                            self.tool = Tool::Polyline;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.label("Other");
+                        if ui.button("Pen (P)").clicked() {
+                            self.tool = Tool::Pen;
+                            ui.close_menu();
+                        }
+                        if ui.button("Text (T)").clicked() {
+                            self.tool = Tool::Text;
+                            ui.close_menu();
+                        }
+                        if ui.button("Pan (Space)").clicked() {
+                            self.tool = Tool::Pan;
+                            ui.close_menu();
+                        }
+                    });
+                });
                 ui.separator();
-                ui.label("File");
-                if ui.text_edit_singleline(&mut self.file_path).changed() {
-                    self.persist_settings();
-                }
-                if ui.button("Load (Ctrl/Cmd+O)").clicked() {
-                    self.load_from_path();
-                }
-                if ui.button("Save (Ctrl/Cmd+S)").clicked() {
-                    self.save_to_path();
-                }
+                tool_button(ui, "V", Tool::Select, &mut self.tool);
+                tool_button(ui, "R", Tool::Rectangle, &mut self.tool);
+                tool_button(ui, "O", Tool::Ellipse, &mut self.tool);
+                tool_button(ui, "△", Tool::Triangle, &mut self.tool);
+                tool_button(ui, "▱", Tool::Parallelogram, &mut self.tool);
+                tool_button(ui, "⏢", Tool::Trapezoid, &mut self.tool);
+                tool_button(ui, "L", Tool::Line, &mut self.tool);
+                tool_button(ui, "→", Tool::Arrow, &mut self.tool);
+                tool_button(ui, "↔", Tool::BidirectionalArrow, &mut self.tool);
+                tool_button(ui, "⌇", Tool::Polyline, &mut self.tool);
+                tool_button(ui, "✎", Tool::Pen, &mut self.tool);
+                tool_button(ui, "T", Tool::Text, &mut self.tool);
                 ui.separator();
-                ui.label("SVG");
-                if ui.text_edit_singleline(&mut self.svg_path).changed() {
-                    self.persist_settings();
-                }
-                if ui.button("Export (Cmd+Shift+S)").clicked() {
-                    self.save_svg_to_path();
-                }
-                ui.separator();
-                if ui.button("Front").clicked() {
-                    self.bring_selected_to_front();
-                }
-                if ui.button("Back").clicked() {
-                    self.send_selected_to_back();
-                }
                 if let Some(status) = &self.status {
-                    ui.separator();
                     ui.label(status);
                 }
             });
         });
 
         egui::SidePanel::right("right_panel")
-            .resizable(false)
+            .resizable(true)
+            .min_width(200.0)
             .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("Properties");
                 ui.separator();
                 if ui
@@ -674,8 +1125,9 @@ impl eframe::App for DiagramApp {
                 ui.separator();
                 ui.label("Shortcuts");
                 ui.label(
-                    "Space tap command palette, Cmd+Shift+P command palette, V/R/O/L/A/P/T tools, Del delete, Esc select, Ctrl/Cmd+S save, Ctrl/Cmd+Shift+S export SVG, Ctrl/Cmd+O load",
+                    "Space: command palette, ⌘⇧P: command palette, V/R/O/L/A/P/T: tools, Del: delete, Esc: select, ⌘S: save, ⌘⇧S: export SVG, ⌘O: load",
                 );
+                });
             });
 
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
@@ -1402,15 +1854,38 @@ impl eframe::App for DiagramApp {
             }
         });
 
+        let has_resizable = self.selected.iter().any(|id| {
+            self.doc.elements.iter().find(|e| e.id == *id).map_or(false, |e| {
+                matches!(
+                    e.kind,
+                    model::ElementKind::Rect { .. }
+                        | model::ElementKind::Ellipse { .. }
+                        | model::ElementKind::Triangle { .. }
+                        | model::ElementKind::Parallelogram { .. }
+                        | model::ElementKind::Trapezoid { .. }
+                )
+            })
+        });
         let cx = CommandContext {
             selected_len: self.selected.len(),
             has_undo: !self.history.is_empty(),
             has_redo: !self.future.is_empty(),
             can_ungroup: self.selected.iter().any(|id| self.group_of(*id).is_some()),
             snap_to_grid: self.snap_to_grid,
+            has_resizable,
+        };
+        let submit_input = self.command_palette.is_awaiting_input()
+            && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+        let input_data = if submit_input {
+            self.command_palette.take_input_data()
+        } else {
+            None
         };
         let cmd = { self.command_palette.ui(ctx, cx) };
-        if let Some(cmd) = cmd {
+        if let Some((mode, value)) = input_data {
+            super::command_palette::CommandPalette::execute_input(self, mode, &value);
+            self.command_palette.close();
+        } else if let Some(cmd) = cmd {
             super::command_palette::CommandPalette::execute(self, ctx, cmd);
         }
     }

@@ -173,12 +173,12 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
         let dash = dasharray(e.style.stroke.line_style, stroke_width);
         let stroke_attrs = if let Some(dash) = dash {
             format!(
-                r#"stroke="{}" stroke-opacity="{:.3}" stroke-width="{:.3}" fill="none" stroke-dasharray="{}""#,
+                r#"stroke="{}" stroke-opacity="{:.3}" stroke-width="{:.3}" stroke-dasharray="{}""#,
                 stroke_rgb, stroke_opacity, stroke_width, dash
             )
         } else {
             format!(
-                r#"stroke="{}" stroke-opacity="{:.3}" stroke-width="{:.3}" fill="none""#,
+                r#"stroke="{}" stroke-opacity="{:.3}" stroke-width="{:.3}""#,
                 stroke_rgb, stroke_opacity, stroke_width
             )
         };
@@ -438,7 +438,7 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
                         }
                     }
                     out.push_str(&format!(
-                        r#"<polyline points="{}" {} />"#,
+                        r#"<polyline points="{}" {} fill="none" />"#,
                         points_attr(&pts),
                         attrs
                     ));
@@ -449,7 +449,7 @@ pub(super) fn document_to_svg(doc: &model::Document) -> String {
                 if points.len() >= 2 {
                     let pts: Vec<egui::Pos2> = points.iter().map(|p| p.to_pos2()).collect();
                     out.push_str(&format!(
-                        r#"<polyline points="{}" {} />"#,
+                        r#"<polyline points="{}" {} fill="none" />"#,
                         points_attr(&pts),
                         stroke_attrs
                     ));

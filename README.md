@@ -50,11 +50,11 @@ Add the following features:
     - [x] Change to select mode using esc
     - [x] Keyboard prefix + fzf search to choose editing actions
     - [x] Persistent settings
-    - [ ] Save to svg
+    - [x] Save to svg
     - [ ] Colorschemes/pallete registration
     - [ ] Multi-scene support?
     - [ ] Better app-icon
 - Menubar improvements
-    - [ ] Scroll as I press the arrow keys
-    - [ ] Various object editing features
+    - [x] Scroll as I press the arrow keys
+    - [x] Various object editing features
         - Object sizes, color, font, line format
