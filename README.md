@@ -1,6 +1,7 @@
 # Suyu
 
 A diagramming tool written in Rust.
+Supports exporting to SVG.
 
 ## Installation
 
